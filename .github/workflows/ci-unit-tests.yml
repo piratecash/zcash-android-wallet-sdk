@@ -2,8 +2,6 @@ name: CI Unit Tests
 
 on:
   push:
-    branches:
-      - '**'
     tags:
       - 'v*'
 
