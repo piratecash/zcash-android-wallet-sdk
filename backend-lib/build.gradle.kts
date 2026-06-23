@@ -72,7 +72,7 @@ val cargoTargets = project.providers.gradleProperty("ZCASH_ANDROID_RUST_TARGETS"
     .getOrElse(defaultCargoTargets)
 
 fun cargoBuildTaskName(target: String) = when (target) {
-    "arm" -> "cargoBuild"
+    "arm" -> "cargoBuildArm"
     "arm64" -> "cargoBuildArm64"
     "x86" -> "cargoBuildX86"
     "x86_64" -> "cargoBuildX86_64"
@@ -99,12 +99,18 @@ cargo {
 // incompatibility issue we need to add rust jni directory manually. See
 // https://github.com/mozilla/rust-android-gradle/issues/118
 project.afterEvaluate {
+    val cargoTasks = cargoTargets.map(::cargoBuildTaskName)
+
     tasks
-        .matching {
-            name.contains("^merge.+JniLibFolders$".toRegex())
-        }
+        .matching { task -> task.name.startsWith("pre") && task.name.endsWith("Build") }
         .configureEach {
-            dependsOn(cargoTargets.map(::cargoBuildTaskName))
+            dependsOn(cargoTasks)
+        }
+
+    tasks
+        .matching { task -> task.name.startsWith("merge") && task.name.endsWith("JniLibFolders") }
+        .configureEach {
+            dependsOn(cargoTasks)
             // Fix for mergeDebugJniLibFolders UP-TO-DATE
             inputs.dir(layout.buildDirectory.dir("rustJniLibs/android").get().asFile)
         }
