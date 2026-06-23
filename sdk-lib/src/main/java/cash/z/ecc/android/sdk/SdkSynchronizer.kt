@@ -12,6 +12,7 @@ import cash.z.ecc.android.sdk.block.processor.CompactBlockProcessor.State.Initia
 import cash.z.ecc.android.sdk.block.processor.CompactBlockProcessor.State.Stopped
 import cash.z.ecc.android.sdk.block.processor.CompactBlockProcessor.State.Synced
 import cash.z.ecc.android.sdk.block.processor.CompactBlockProcessor.State.Syncing
+import cash.z.ecc.android.sdk.block.processor.UnminedTransactionResubmitter
 import cash.z.ecc.android.sdk.exception.CompactBlockProcessorException
 import cash.z.ecc.android.sdk.exception.InitializeException
 import cash.z.ecc.android.sdk.exception.TorInitializationErrorException
@@ -46,10 +47,15 @@ import cash.z.ecc.android.sdk.internal.storage.preference.EncryptedPreferencePro
 import cash.z.ecc.android.sdk.internal.storage.preference.StandardPreferenceProvider
 import cash.z.ecc.android.sdk.internal.storage.preference.api.PreferenceProvider
 import cash.z.ecc.android.sdk.internal.storage.preference.keys.StandardPreferenceKeys.SDK_VERSION_OF_LAST_FIX_WITNESSES_CALL
+import cash.z.ecc.android.sdk.internal.transaction.OfflineTransactionTracker
 import cash.z.ecc.android.sdk.internal.transaction.OutboundTransactionManager
 import cash.z.ecc.android.sdk.internal.transaction.OutboundTransactionManagerImpl
+import cash.z.ecc.android.sdk.internal.transaction.PreferenceOfflineTransactionTracker
+import cash.z.ecc.android.sdk.internal.transaction.SignedTransactionCreator
 import cash.z.ecc.android.sdk.internal.transaction.TransactionEncoder
 import cash.z.ecc.android.sdk.internal.transaction.TransactionEncoderImpl
+import cash.z.ecc.android.sdk.internal.transaction.TransactionSubmitSequencer
+import cash.z.ecc.android.sdk.internal.transaction.toEncodedTransaction
 import cash.z.ecc.android.sdk.model.Account
 import cash.z.ecc.android.sdk.model.AccountCreateSetup
 import cash.z.ecc.android.sdk.model.AccountImportSetup
@@ -63,6 +69,7 @@ import cash.z.ecc.android.sdk.model.Pczt
 import cash.z.ecc.android.sdk.model.PercentDecimal
 import cash.z.ecc.android.sdk.model.Proposal
 import cash.z.ecc.android.sdk.model.SdkFlags
+import cash.z.ecc.android.sdk.model.SignedRawZcashTransaction
 import cash.z.ecc.android.sdk.model.SingleUseTransparentAddress
 import cash.z.ecc.android.sdk.model.TransactionId
 import cash.z.ecc.android.sdk.model.TransactionOutput
@@ -148,6 +155,7 @@ class SdkSynchronizer private constructor(
     private val synchronizerKey: SynchronizerKey,
     private val storage: DerivedDataRepository,
     private val txManager: OutboundTransactionManager,
+    private val offlineTransactionTracker: OfflineTransactionTracker,
     val processor: CompactBlockProcessor,
     private val backend: TypesafeBackend,
     private val fetchFastestServers: FastestServerFetcher,
@@ -158,6 +166,9 @@ class SdkSynchronizer private constructor(
     private val walletClientFactory: WalletClientFactory,
     private val sdkFlags: SdkFlags
 ) : CloseableSynchronizer {
+    private val signedTransactionCreator = SignedTransactionCreator(offlineTransactionTracker)
+    private val transactionSubmitSequencer = TransactionSubmitSequencer(txManager)
+
     companion object {
         private sealed class InstanceState {
             data object Active : InstanceState()
@@ -188,6 +199,7 @@ class SdkSynchronizer private constructor(
             alias: String,
             repository: DerivedDataRepository,
             txManager: OutboundTransactionManager,
+            offlineTransactionTracker: OfflineTransactionTracker,
             processor: CompactBlockProcessor,
             backend: TypesafeBackend,
             fastestServerFetcher: FastestServerFetcher,
@@ -207,6 +219,7 @@ class SdkSynchronizer private constructor(
                     synchronizerKey = synchronizerKey,
                     storage = repository,
                     txManager = txManager,
+                    offlineTransactionTracker = offlineTransactionTracker,
                     processor = processor,
                     backend = backend,
                     fetchFastestServers = fastestServerFetcher,
@@ -1033,29 +1046,17 @@ class SdkSynchronizer private constructor(
     ): Flow<TransactionSubmitResult> {
         // Internally, this logic submits and checks every incoming transaction, and once [Failure] or
         // [NotAttempted] submission result occurs, it returns [NotAttempted] for the rest of them
-        var anySubmissionFailed = false
-        return txManager
-            .createProposedTransactions(proposal, usk)
-            .asFlow()
-            .map { transaction ->
-                if (anySubmissionFailed) {
-                    TransactionSubmitResult.NotAttempted(transaction.txId)
-                } else {
-                    val submission = txManager.submit(transaction)
-                    when (submission) {
-                        is TransactionSubmitResult.Success -> {
-                            // Expected state
-                        }
-
-                        is TransactionSubmitResult.Failure,
-                        is TransactionSubmitResult.NotAttempted -> {
-                            anySubmissionFailed = true
-                        }
-                    }
-                    submission
-                }
-            }
+        return transactionSubmitSequencer.submit(txManager.createProposedTransactions(proposal, usk))
     }
+
+    override suspend fun createSignedTransactions(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<SignedRawZcashTransaction> =
+        signedTransactionCreator.create(txManager.createProposedTransactions(proposal, usk))
+
+    override suspend fun submitRawTransaction(transaction: SignedRawZcashTransaction): TransactionSubmitResult =
+        txManager.submit(transaction.toEncodedTransaction())
 
     override suspend fun createPcztFromProposal(
         accountUuid: AccountUuid,
@@ -1356,7 +1357,8 @@ internal object DefaultSynchronizerFactory {
         birthdayHeight: BlockHeight,
         txManager: OutboundTransactionManager,
         sdkFlags: SdkFlags,
-        saplingParamFetcher: SaplingParamFetcher
+        saplingParamFetcher: SaplingParamFetcher,
+        offlineTransactionTracker: OfflineTransactionTracker
     ): CompactBlockProcessor =
         CompactBlockProcessor(
             backend = backend,
@@ -1365,7 +1367,13 @@ internal object DefaultSynchronizerFactory {
             repository = repository,
             txManager = txManager,
             sdkFlags = sdkFlags,
-            saplingParamFetcher = saplingParamFetcher
+            saplingParamFetcher = saplingParamFetcher,
+            unminedTransactionResubmitter =
+                UnminedTransactionResubmitter(
+                    repository = repository,
+                    txManager = txManager,
+                    offlineTransactionTracker = offlineTransactionTracker
+                )
         )
 }
 

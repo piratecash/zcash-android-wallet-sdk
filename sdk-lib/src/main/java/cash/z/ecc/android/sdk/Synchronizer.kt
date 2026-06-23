@@ -20,6 +20,7 @@ import cash.z.ecc.android.sdk.internal.exchange.UsdExchangeRateFetcher
 import cash.z.ecc.android.sdk.internal.model.TorClient
 import cash.z.ecc.android.sdk.internal.model.ext.toBlockHeight
 import cash.z.ecc.android.sdk.internal.storage.preference.StandardPreferenceProvider
+import cash.z.ecc.android.sdk.internal.transaction.PreferenceOfflineTransactionTracker
 import cash.z.ecc.android.sdk.model.Account
 import cash.z.ecc.android.sdk.model.AccountBalance
 import cash.z.ecc.android.sdk.model.AccountCreateSetup
@@ -32,6 +33,7 @@ import cash.z.ecc.android.sdk.model.Pczt
 import cash.z.ecc.android.sdk.model.PercentDecimal
 import cash.z.ecc.android.sdk.model.Proposal
 import cash.z.ecc.android.sdk.model.SdkFlags
+import cash.z.ecc.android.sdk.model.SignedRawZcashTransaction
 import cash.z.ecc.android.sdk.model.SingleUseTransparentAddress
 import cash.z.ecc.android.sdk.model.TransactionId
 import cash.z.ecc.android.sdk.model.TransactionOutput
@@ -347,6 +349,22 @@ interface Synchronizer {
         proposal: Proposal,
         usk: UnifiedSpendingKey
     ): Flow<TransactionSubmitResult>
+
+    /**
+     * Creates and signs the transactions in the given proposal without submitting them.
+     *
+     * The returned transactions are excluded from the SDK's automatic unmined transaction
+     * resubmission loop on this device. They can be submitted later with [submitRawTransaction].
+     */
+    suspend fun createSignedTransactions(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<SignedRawZcashTransaction>
+
+    /**
+     * Submits an already signed raw transaction without requiring local spend authority.
+     */
+    suspend fun submitRawTransaction(transaction: SignedRawZcashTransaction): TransactionSubmitResult
 
     /**
      * Creates a partially-created (unsigned without proofs) transaction from the given proposal.
@@ -928,6 +946,9 @@ interface Synchronizer {
             val encoder = DefaultSynchronizerFactory.defaultEncoder(backend, saplingParamFetcher, repository)
 
             val txManager = DefaultSynchronizerFactory.defaultTxManager(encoder, walletClient, sdkFlags)
+            val standardPreferenceProvider = StandardPreferenceProvider(context)
+            val preferenceProvider = standardPreferenceProvider()
+            val offlineTransactionTracker = PreferenceOfflineTransactionTracker(preferenceProvider)
             val processor =
                 DefaultSynchronizerFactory.defaultProcessor(
                     backend = backend,
@@ -936,10 +957,9 @@ interface Synchronizer {
                     repository = repository,
                     txManager = txManager,
                     sdkFlags = sdkFlags,
-                    saplingParamFetcher = saplingParamFetcher
+                    saplingParamFetcher = saplingParamFetcher,
+                    offlineTransactionTracker = offlineTransactionTracker
                 )
-
-            val standardPreferenceProvider = StandardPreferenceProvider(context)
 
             return SdkSynchronizer.new(
                 context = context.applicationContext,
@@ -947,6 +967,7 @@ interface Synchronizer {
                 alias = alias,
                 repository = repository,
                 txManager = txManager,
+                offlineTransactionTracker = offlineTransactionTracker,
                 processor = processor,
                 backend = backend,
                 fastestServerFetcher =
@@ -958,7 +979,7 @@ interface Synchronizer {
                     ),
                 fetchExchangeChangeUsd =
                     exchangeRateIsolatedTorClient?.let { UsdExchangeRateFetcher(isolatedTorClient = it) },
-                preferenceProvider = standardPreferenceProvider(),
+                preferenceProvider = preferenceProvider,
                 torClient = torClient,
                 walletClient = walletClient,
                 walletClientFactory = walletClientFactory,

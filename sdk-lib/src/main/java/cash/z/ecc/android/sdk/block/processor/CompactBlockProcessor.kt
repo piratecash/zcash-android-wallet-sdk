@@ -71,7 +71,6 @@ import cash.z.ecc.android.sdk.model.PercentDecimal
 import cash.z.ecc.android.sdk.model.RawTransaction
 import cash.z.ecc.android.sdk.model.SdkFlags
 import cash.z.ecc.android.sdk.model.TransactionId
-import cash.z.ecc.android.sdk.model.TransactionSubmitResult
 import cash.z.ecc.android.sdk.model.UnifiedAddressRequest
 import cash.z.ecc.android.sdk.model.Zatoshi
 import co.electriccoin.lightwallet.client.ServiceMode
@@ -138,7 +137,8 @@ class CompactBlockProcessor internal constructor(
     private val repository: DerivedDataRepository,
     private val txManager: OutboundTransactionManager,
     private val sdkFlags: SdkFlags,
-    private val saplingParamFetcher: SaplingParamFetcher
+    private val saplingParamFetcher: SaplingParamFetcher,
+    private val unminedTransactionResubmitter: UnminedTransactionResubmitter
 ) {
     /**
      * Callback for any non-trivial errors that occur while processing compact blocks.
@@ -2680,45 +2680,7 @@ class CompactBlockProcessor internal constructor(
      */
     @Throws(TransactionEncoderException.TransactionNotFoundException::class)
     private suspend fun resubmitUnminedTransactions(blockHeight: BlockHeight?) {
-        // Run the check only in case we have already obtained the current chain tip
-        if (blockHeight == null) {
-            return
-        }
-        val list = repository.findUnminedTransactionsWithinExpiry(blockHeight)
-
-        Twig.debug { "Trx resubmission: ${list.size}, ${list.joinToString(separator = ", ") { it.txIdString() }}" }
-
-        if (list.isNotEmpty()) {
-            list.forEach {
-                val trxForResubmission =
-                    repository.findEncodedTransactionByTxId(it.rawId)
-                        ?: throw TransactionEncoderException.TransactionNotFoundException(it.rawId)
-
-                Twig.debug { "Trx resubmission: Found: ${trxForResubmission.txIdString()}" }
-
-                retryUpToAndContinue(TRANSACTION_RESUBMIT_RETRIES) {
-                    when (val response = txManager.submit(trxForResubmission)) {
-                        is TransactionSubmitResult.Success -> {
-                            Twig.info { "Trx resubmission success: ${response.txIdString()}" }
-                        }
-
-                        is TransactionSubmitResult.Failure -> {
-                            Twig.error { "Trx resubmission failure: ${response.description}" }
-                            throw LightWalletException.TransactionSubmitException(
-                                response.code,
-                                response.description,
-                            )
-                        }
-
-                        is TransactionSubmitResult.NotAttempted -> {
-                            Twig.warn { "Trx resubmission not attempted: ${response.txIdString()}" }
-                        }
-                    }
-                }
-            }
-        } else {
-            Twig.debug { "Trx resubmission: No trx for resubmission found" }
-        }
+        unminedTransactionResubmitter.resubmit(blockHeight)
     }
 
     suspend fun getUtxoCacheBalance(address: String): Zatoshi = backend.getDownloadedUtxoBalance(address)
