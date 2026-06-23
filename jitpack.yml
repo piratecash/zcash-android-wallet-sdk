@@ -3,8 +3,8 @@ jdk:
 
 before_install:
   - export ANDROID_HOME="/opt/android-sdk-linux"; export ANDROID_SDK_ROOT="${ANDROID_HOME}"; curl -sSLo /tmp/android-commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip; unzip -q /tmp/android-commandlinetools.zip -d /tmp/android-commandlinetools; rm -f /tmp/android-commandlinetools.zip; yes | /tmp/android-commandlinetools/cmdline-tools/bin/sdkmanager --sdk_root="${ANDROID_HOME}" "ndk;27.0.12077973"; rm -rf /tmp/android-commandlinetools "${HOME}/.android/cache"
-  - curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.84.1 --profile minimal
-  - export PATH="${HOME}/.cargo/bin:${PATH}"; rustup default 1.84.1; rustup target add --toolchain 1.84.1 armv7-linux-androideabi aarch64-linux-android i686-linux-android x86_64-linux-android
+  - curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92.0 --profile minimal
+  - export PATH="${HOME}/.cargo/bin:${PATH}"; rustup default 1.92.0; rustup target add --toolchain 1.92.0 armv7-linux-androideabi aarch64-linux-android i686-linux-android x86_64-linux-android
 
 install:
-  - export ANDROID_HOME="/opt/android-sdk-linux"; export ANDROID_SDK_ROOT="${ANDROID_HOME}"; export PATH="${HOME}/.cargo/bin:${PATH}"; ./gradlew publishToMavenLocal -PIS_SNAPSHOT=false -PZCASH_SKIP_SIGNING=true -PLIBRARY_VERSION=${VERSION}
+  - export ANDROID_HOME="/opt/android-sdk-linux"; export ANDROID_SDK_ROOT="${ANDROID_HOME}"; export PATH="${HOME}/.cargo/bin:${PATH}"; export RUST_ANDROID_GRADLE_PYTHON_COMMAND=python3; ./gradlew publishToMavenLocal -PIS_SNAPSHOT=false -PZCASH_SKIP_SIGNING=true -PLIBRARY_VERSION=${VERSION}
