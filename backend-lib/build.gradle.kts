@@ -62,22 +62,29 @@ android {
     }
 }
 
+val defaultCargoTargets = listOf("arm", "arm64", "x86", "x86_64")
+val cargoTargets = project.providers.gradleProperty("ZCASH_ANDROID_RUST_TARGETS")
+    .map { targets ->
+        targets.split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+    .getOrElse(defaultCargoTargets)
+
+fun cargoBuildTaskName(target: String) = when (target) {
+    "arm" -> "cargoBuild"
+    "arm64" -> "cargoBuildArm64"
+    "x86" -> "cargoBuildX86"
+    "x86_64" -> "cargoBuildX86_64"
+    else -> error("Unsupported cargo target: $target")
+}
+
 cargo {
     module = "."
     libname = "zcashwalletsdk"
-    targets = listOf(
-        "arm",
-        "arm64",
-        "x86",
-        "x86_64"
-    )
+    targets = cargoTargets
     val minSdkVersion = project.property("ANDROID_MIN_SDK_VERSION").toString().toInt()
-    apiLevels = mapOf(
-        "arm" to minSdkVersion,
-        "arm64" to minSdkVersion,
-        "x86" to minSdkVersion,
-        "x86_64" to minSdkVersion,
-    )
+    apiLevels = cargoTargets.associateWith { minSdkVersion }
     profile = "release"
     prebuiltToolchains = true
     // To force the compiler to use the given page size
@@ -97,7 +104,7 @@ project.afterEvaluate {
             name.contains("^merge.+JniLibFolders$".toRegex())
         }
         .configureEach {
-            dependsOn("cargoBuild", "cargoBuildArm64", "cargoBuildX86", "cargoBuildX86_64")
+            dependsOn(cargoTargets.map(::cargoBuildTaskName))
             // Fix for mergeDebugJniLibFolders UP-TO-DATE
             inputs.dir(layout.buildDirectory.dir("rustJniLibs/android").get().asFile)
         }
@@ -172,9 +179,9 @@ tasks {
 }
 
 project.afterEvaluate {
-    val cargoTask = tasks.getByName("cargoBuild")
-    tasks.getByName("javaPreCompileDebug").dependsOn(cargoTask)
-    tasks.getByName("javaPreCompileRelease").dependsOn(cargoTask)
+    val cargoTasks = cargoTargets.map(::cargoBuildTaskName)
+    tasks.getByName("javaPreCompileDebug").dependsOn(cargoTasks)
+    tasks.getByName("javaPreCompileRelease").dependsOn(cargoTasks)
 }
 
 fun MinimalExternalModuleDependency.asCoordinateString() =
