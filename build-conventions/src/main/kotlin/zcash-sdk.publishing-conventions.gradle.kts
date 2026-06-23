@@ -9,7 +9,8 @@ val publicationVariant = "release"
 val isSnapshot = project.property("IS_SNAPSHOT").toString().toBoolean()
 val myVersion = project.property("LIBRARY_VERSION").toString()
 
-val myGroup = "cash.z.ecc.android"
+val myGroup = project.providers.gradleProperty("JITPACK_GROUP")
+    .getOrElse("cash.z.ecc.android")
 project.group = myGroup
 
 plugins.apply(MavenPublishPlugin::class.java)
