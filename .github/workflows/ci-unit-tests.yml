@@ -28,7 +28,7 @@ jobs:
           java-version: 17
       - name: Setup Android NDK
         timeout-minutes: 8
-        run: yes | sdkmanager "ndk;27.0.12077973"
+        run: yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "ndk;27.0.12077973"
       - name: Setup Rust
         timeout-minutes: 8
         run: |
