@@ -6,6 +6,7 @@ import cash.z.ecc.android.sdk.internal.storage.preference.model.entry.Preference
 import cash.z.ecc.android.sdk.model.FirstClassByteArray
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicInteger
 
 internal interface OfflineTransactionTracker {
     suspend fun markTransactions(txIds: Collection<FirstClassByteArray>)
@@ -13,6 +14,10 @@ internal interface OfflineTransactionTracker {
     suspend fun markedTransactions(txIds: Collection<FirstClassByteArray>): Set<FirstClassByteArray>
 
     suspend fun retainTransactions(txIds: Collection<FirstClassByteArray>)
+
+    suspend fun <T> withOfflineCreation(block: suspend () -> T): T
+
+    fun isOfflineCreationInProgress(): Boolean
 }
 
 internal object NoOpOfflineTransactionTracker : OfflineTransactionTracker {
@@ -21,12 +26,19 @@ internal object NoOpOfflineTransactionTracker : OfflineTransactionTracker {
     override suspend fun markedTransactions(txIds: Collection<FirstClassByteArray>) = emptySet<FirstClassByteArray>()
 
     override suspend fun retainTransactions(txIds: Collection<FirstClassByteArray>) = Unit
+
+    override suspend fun <T> withOfflineCreation(block: suspend () -> T): T = block()
+
+    override fun isOfflineCreationInProgress(): Boolean = false
 }
 
 internal class PreferenceOfflineTransactionTracker(
-    private val preferenceProvider: PreferenceProvider
+    private val preferenceProvider: PreferenceProvider,
+    scope: String
 ) : OfflineTransactionTracker {
     private val mutex = Mutex()
+    private val offlineCreationDepth = AtomicInteger(0)
+    private val key = PreferenceKey("${KEY_PREFIX}_$scope")
 
     override suspend fun markTransactions(txIds: Collection<FirstClassByteArray>) {
         if (txIds.isEmpty()) return
@@ -52,22 +64,33 @@ internal class PreferenceOfflineTransactionTracker(
         }
     }
 
+    override suspend fun <T> withOfflineCreation(block: suspend () -> T): T {
+        offlineCreationDepth.incrementAndGet()
+        return try {
+            block()
+        } finally {
+            offlineCreationDepth.decrementAndGet()
+        }
+    }
+
+    override fun isOfflineCreationInProgress(): Boolean = offlineCreationDepth.get() > 0
+
     private suspend fun readTransactionIds(): Set<String> =
         preferenceProvider
-            .getString(KEY)
+            .getString(key)
             ?.split(SEPARATOR)
             ?.filterTo(mutableSetOf()) { it.isNotBlank() }
             .orEmpty()
 
     private suspend fun writeTransactionIds(txIds: Set<String>) {
         preferenceProvider.putString(
-            key = KEY,
+            key = key,
             value = txIds.sorted().joinToString(SEPARATOR)
         )
     }
 
     private companion object {
-        private val KEY = PreferenceKey("offline_created_transaction_ids")
+        private const val KEY_PREFIX = "offline_created_transaction_ids"
         private const val SEPARATOR = ","
     }
 }

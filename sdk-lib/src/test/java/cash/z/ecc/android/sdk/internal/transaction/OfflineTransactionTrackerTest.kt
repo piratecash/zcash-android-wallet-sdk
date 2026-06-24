@@ -15,7 +15,7 @@ class OfflineTransactionTrackerTest {
     @Test
     fun markTransactions_newTxId_persistsTxId() =
         runBlocking {
-            val tracker = PreferenceOfflineTransactionTracker(FakePreferenceProvider())
+            val tracker = PreferenceOfflineTransactionTracker(FakePreferenceProvider(), SCOPE)
             val txId = txId(1)
 
             tracker.markTransactions(listOf(txId))
@@ -26,7 +26,7 @@ class OfflineTransactionTrackerTest {
     @Test
     fun retainTransactions_missingTxId_removesTxId() =
         runBlocking {
-            val tracker = PreferenceOfflineTransactionTracker(FakePreferenceProvider())
+            val tracker = PreferenceOfflineTransactionTracker(FakePreferenceProvider(), SCOPE)
             val retained = txId(1)
             val removed = txId(2)
             tracker.markTransactions(listOf(retained, removed))
@@ -39,7 +39,40 @@ class OfflineTransactionTrackerTest {
             assertFalse(removed in marked)
         }
 
+    @Test
+    fun retainTransactions_otherTrackerScope_keepsTxId() =
+        runBlocking {
+            val preferenceProvider = FakePreferenceProvider()
+            val firstTracker = PreferenceOfflineTransactionTracker(preferenceProvider, "first")
+            val secondTracker = PreferenceOfflineTransactionTracker(preferenceProvider, "second")
+            val firstTxId = txId(1)
+            val secondTxId = txId(2)
+            firstTracker.markTransactions(listOf(firstTxId))
+
+            secondTracker.retainTransactions(listOf(secondTxId))
+
+            assertTrue(firstTxId in firstTracker.markedTransactions(listOf(firstTxId)))
+        }
+
+    @Test
+    fun withOfflineCreation_runningBlock_reportsInProgress() =
+        runBlocking {
+            val tracker = PreferenceOfflineTransactionTracker(FakePreferenceProvider(), SCOPE)
+            var inProgress = false
+
+            tracker.withOfflineCreation {
+                inProgress = tracker.isOfflineCreationInProgress()
+            }
+
+            assertTrue(inProgress)
+            assertFalse(tracker.isOfflineCreationInProgress())
+        }
+
     private fun txId(value: Byte) = FirstClassByteArray(byteArrayOf(value))
+
+    private companion object {
+        private const val SCOPE = "scope"
+    }
 }
 
 private class FakePreferenceProvider : PreferenceProvider {

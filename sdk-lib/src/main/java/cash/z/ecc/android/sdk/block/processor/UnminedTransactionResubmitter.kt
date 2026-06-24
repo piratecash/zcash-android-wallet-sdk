@@ -19,8 +19,14 @@ internal class UnminedTransactionResubmitter(
 ) {
     @Throws(TransactionEncoderException.TransactionNotFoundException::class)
     suspend fun resubmit(blockHeight: BlockHeight?) {
-        if (blockHeight == null) return
+        if (blockHeight != null && !offlineTransactionTracker.isOfflineCreationInProgress()) {
+            resubmitTransactions(blockHeight)
+        } else if (blockHeight != null) {
+            Twig.debug { "Trx resubmission skipped while offline transaction creation is in progress" }
+        }
+    }
 
+    private suspend fun resubmitTransactions(blockHeight: BlockHeight) {
         val transactions = repository.findUnminedTransactionsWithinExpiry(blockHeight)
         val transactionIds = transactions.map { it.rawId }
         offlineTransactionTracker.retainTransactions(transactionIds)
@@ -44,10 +50,13 @@ internal class UnminedTransactionResubmitter(
 
         if (transactionsForResubmission.isEmpty()) {
             Twig.debug { "Trx resubmission: No trx for resubmission found" }
-            return
+        } else {
+            submitTransactions(transactionsForResubmission)
         }
+    }
 
-        transactionsForResubmission.forEach { transaction ->
+    private suspend fun submitTransactions(transactions: List<DbTransactionOverview>) {
+        transactions.forEach { transaction ->
             val trxForResubmission =
                 repository.findEncodedTransactionByTxId(transaction.rawId)
                     ?: throw TransactionEncoderException.TransactionNotFoundException(transaction.rawId)

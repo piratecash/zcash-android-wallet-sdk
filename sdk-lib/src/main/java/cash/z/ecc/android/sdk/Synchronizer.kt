@@ -948,7 +948,7 @@ interface Synchronizer {
             val txManager = DefaultSynchronizerFactory.defaultTxManager(encoder, walletClient, sdkFlags)
             val standardPreferenceProvider = StandardPreferenceProvider(context)
             val preferenceProvider = standardPreferenceProvider()
-            val offlineTransactionTracker = PreferenceOfflineTransactionTracker(preferenceProvider)
+            val offlineTransactionTracker = PreferenceOfflineTransactionTracker(preferenceProvider, alias)
             val processor =
                 DefaultSynchronizerFactory.defaultProcessor(
                     backend = backend,

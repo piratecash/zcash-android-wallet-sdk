@@ -1053,7 +1053,9 @@ class SdkSynchronizer private constructor(
         proposal: Proposal,
         usk: UnifiedSpendingKey
     ): List<SignedRawZcashTransaction> =
-        signedTransactionCreator.create(txManager.createProposedTransactions(proposal, usk))
+        signedTransactionCreator.create {
+            txManager.createProposedTransactions(proposal, usk)
+        }
 
     override suspend fun submitRawTransaction(transaction: SignedRawZcashTransaction): TransactionSubmitResult =
         txManager.submit(transaction.toEncodedTransaction())
@@ -1365,7 +1367,6 @@ internal object DefaultSynchronizerFactory {
             downloader = downloader,
             minimumHeight = birthdayHeight,
             repository = repository,
-            txManager = txManager,
             sdkFlags = sdkFlags,
             saplingParamFetcher = saplingParamFetcher,
             unminedTransactionResubmitter =

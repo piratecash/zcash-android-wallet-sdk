@@ -61,7 +61,6 @@ import cash.z.ecc.android.sdk.internal.model.ext.from
 import cash.z.ecc.android.sdk.internal.model.ext.toBlockHeight
 import cash.z.ecc.android.sdk.internal.model.ext.toTransactionStatus
 import cash.z.ecc.android.sdk.internal.repository.DerivedDataRepository
-import cash.z.ecc.android.sdk.internal.transaction.OutboundTransactionManager
 import cash.z.ecc.android.sdk.model.Account
 import cash.z.ecc.android.sdk.model.AccountBalance
 import cash.z.ecc.android.sdk.model.AccountUuid
@@ -135,7 +134,6 @@ class CompactBlockProcessor internal constructor(
     val downloader: CompactBlockDownloader,
     minimumHeight: BlockHeight,
     private val repository: DerivedDataRepository,
-    private val txManager: OutboundTransactionManager,
     private val sdkFlags: SdkFlags,
     private val saplingParamFetcher: SaplingParamFetcher,
     private val unminedTransactionResubmitter: UnminedTransactionResubmitter

@@ -6,8 +6,10 @@ import cash.z.ecc.android.sdk.model.SignedRawZcashTransaction
 internal class SignedTransactionCreator(
     private val offlineTransactionTracker: OfflineTransactionTracker
 ) {
-    suspend fun create(transactions: List<EncodedTransaction>): List<SignedRawZcashTransaction> {
-        offlineTransactionTracker.markTransactions(transactions.map { it.txId })
-        return transactions.map { it.toSignedRawZcashTransaction() }
-    }
+    suspend fun create(createTransactions: suspend () -> List<EncodedTransaction>): List<SignedRawZcashTransaction> =
+        offlineTransactionTracker.withOfflineCreation {
+            val transactions = createTransactions()
+            offlineTransactionTracker.markTransactions(transactions.map { it.txId })
+            transactions.map { it.toSignedRawZcashTransaction() }
+        }
 }
