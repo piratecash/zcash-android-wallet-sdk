@@ -3,6 +3,7 @@ package cash.z.ecc.android.sdk.internal
 import cash.z.ecc.android.sdk.exception.InitializeException
 import cash.z.ecc.android.sdk.exception.PcztException
 import cash.z.ecc.android.sdk.exception.RustLayerException
+import cash.z.ecc.android.sdk.internal.model.EncodedTransaction
 import cash.z.ecc.android.sdk.internal.model.JniBlockMeta
 import cash.z.ecc.android.sdk.internal.model.RewindResult
 import cash.z.ecc.android.sdk.internal.model.ScanRange
@@ -76,6 +77,11 @@ internal interface TypesafeBackend {
         proposal: Proposal,
         usk: UnifiedSpendingKey
     ): List<FirstClassByteArray>
+
+    suspend fun createProposedTransactionsDetached(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction>
 
     /**
      * Creates a partially-created (unsigned without proofs) transaction from the given proposal.

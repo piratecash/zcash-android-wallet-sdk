@@ -25,6 +25,7 @@ import cash.z.ecc.android.sdk.internal.SaplingParamTool
 import cash.z.ecc.android.sdk.internal.Twig
 import cash.z.ecc.android.sdk.internal.TypesafeBackend
 import cash.z.ecc.android.sdk.internal.TypesafeBackendImpl
+import cash.z.ecc.android.sdk.internal.WalletDbMutationGate
 import cash.z.ecc.android.sdk.internal.block.CompactBlockDownloader
 import cash.z.ecc.android.sdk.internal.db.DatabaseCoordinator
 import cash.z.ecc.android.sdk.internal.db.derived.DbDerivedDataRepository
@@ -51,11 +52,11 @@ import cash.z.ecc.android.sdk.internal.transaction.OfflineTransactionTracker
 import cash.z.ecc.android.sdk.internal.transaction.OutboundTransactionManager
 import cash.z.ecc.android.sdk.internal.transaction.OutboundTransactionManagerImpl
 import cash.z.ecc.android.sdk.internal.transaction.PreferenceOfflineTransactionTracker
-import cash.z.ecc.android.sdk.internal.transaction.SignedTransactionCreator
 import cash.z.ecc.android.sdk.internal.transaction.TransactionEncoder
 import cash.z.ecc.android.sdk.internal.transaction.TransactionEncoderImpl
 import cash.z.ecc.android.sdk.internal.transaction.TransactionSubmitSequencer
 import cash.z.ecc.android.sdk.internal.transaction.toEncodedTransaction
+import cash.z.ecc.android.sdk.internal.transaction.toSignedRawZcashTransaction
 import cash.z.ecc.android.sdk.model.Account
 import cash.z.ecc.android.sdk.model.AccountCreateSetup
 import cash.z.ecc.android.sdk.model.AccountImportSetup
@@ -155,7 +156,6 @@ class SdkSynchronizer private constructor(
     private val synchronizerKey: SynchronizerKey,
     private val storage: DerivedDataRepository,
     private val txManager: OutboundTransactionManager,
-    private val offlineTransactionTracker: OfflineTransactionTracker,
     val processor: CompactBlockProcessor,
     private val backend: TypesafeBackend,
     private val fetchFastestServers: FastestServerFetcher,
@@ -166,7 +166,6 @@ class SdkSynchronizer private constructor(
     private val walletClientFactory: WalletClientFactory,
     private val sdkFlags: SdkFlags
 ) : CloseableSynchronizer {
-    private val signedTransactionCreator = SignedTransactionCreator(offlineTransactionTracker)
     private val transactionSubmitSequencer = TransactionSubmitSequencer(txManager)
 
     companion object {
@@ -199,7 +198,6 @@ class SdkSynchronizer private constructor(
             alias: String,
             repository: DerivedDataRepository,
             txManager: OutboundTransactionManager,
-            offlineTransactionTracker: OfflineTransactionTracker,
             processor: CompactBlockProcessor,
             backend: TypesafeBackend,
             fastestServerFetcher: FastestServerFetcher,
@@ -219,7 +217,6 @@ class SdkSynchronizer private constructor(
                     synchronizerKey = synchronizerKey,
                     storage = repository,
                     txManager = txManager,
-                    offlineTransactionTracker = offlineTransactionTracker,
                     processor = processor,
                     backend = backend,
                     fetchFastestServers = fastestServerFetcher,
@@ -1053,9 +1050,8 @@ class SdkSynchronizer private constructor(
         proposal: Proposal,
         usk: UnifiedSpendingKey
     ): List<SignedRawZcashTransaction> =
-        signedTransactionCreator.create {
-            txManager.createProposedTransactions(proposal, usk)
-        }
+        txManager.createSignedTransactionsDetached(proposal, usk)
+            .map { it.toSignedRawZcashTransaction() }
 
     override suspend fun submitRawTransaction(transaction: SignedRawZcashTransaction): TransactionSubmitResult =
         txManager.submit(transaction.toEncodedTransaction())
@@ -1293,16 +1289,19 @@ internal object DefaultSynchronizerFactory {
         network: ZcashNetwork,
         alias: String,
         saplingParamTool: SaplingParamTool,
-        coordinator: DatabaseCoordinator
+        coordinator: DatabaseCoordinator,
+        walletDbMutationGate: WalletDbMutationGate
     ): TypesafeBackend =
         TypesafeBackendImpl(
-            RustBackend.new(
-                coordinator.fsBlockDbRoot(network, alias),
-                coordinator.dataDbFile(network, alias),
-                saplingOutputFile = saplingParamTool.outputParamsFile,
-                saplingSpendFile = saplingParamTool.spendParamsFile,
-                zcashNetworkId = network.id
-            )
+            backend =
+                RustBackend.new(
+                    coordinator.fsBlockDbRoot(network, alias),
+                    coordinator.dataDbFile(network, alias),
+                    saplingOutputFile = saplingParamTool.outputParamsFile,
+                    saplingSpendFile = saplingParamTool.spendParamsFile,
+                    zcashNetworkId = network.id
+                ),
+            walletDbMutationGate = walletDbMutationGate
         )
 
     @Suppress("LongParameterList")

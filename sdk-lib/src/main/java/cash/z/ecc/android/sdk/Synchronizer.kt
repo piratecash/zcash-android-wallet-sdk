@@ -15,6 +15,7 @@ import cash.z.ecc.android.sdk.internal.Files
 import cash.z.ecc.android.sdk.internal.SaplingParamFetcher
 import cash.z.ecc.android.sdk.internal.SaplingParamTool
 import cash.z.ecc.android.sdk.internal.Twig
+import cash.z.ecc.android.sdk.internal.WalletDbMutationGate
 import cash.z.ecc.android.sdk.internal.db.DatabaseCoordinator
 import cash.z.ecc.android.sdk.internal.exchange.UsdExchangeRateFetcher
 import cash.z.ecc.android.sdk.internal.model.TorClient
@@ -860,12 +861,14 @@ interface Synchronizer {
             // The pending transaction database no longer exists, so we can delete the file
             coordinator.deletePendingTransactionDatabase(zcashNetwork, alias)
 
+            val walletDbMutationGate = WalletDbMutationGate()
             val backend =
                 DefaultSynchronizerFactory.defaultBackend(
                     zcashNetwork,
                     alias,
                     saplingParamTool,
-                    coordinator
+                    coordinator,
+                    walletDbMutationGate
                 )
 
             val saplingParamFetcher = SaplingParamFetcher(saplingParamTool, backend)
@@ -967,7 +970,6 @@ interface Synchronizer {
                 alias = alias,
                 repository = repository,
                 txManager = txManager,
-                offlineTransactionTracker = offlineTransactionTracker,
                 processor = processor,
                 backend = backend,
                 fastestServerFetcher =

@@ -69,6 +69,11 @@ internal class OutboundTransactionManagerImpl(
         usk: UnifiedSpendingKey
     ): List<EncodedTransaction> = encoder.createProposedTransactions(proposal, usk)
 
+    override suspend fun createSignedTransactionsDetached(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction> = encoder.createProposedTransactionsDetached(proposal, usk)
+
     override suspend fun submit(encodedTransaction: EncodedTransaction): TransactionSubmitResult =
         when (
             val response =

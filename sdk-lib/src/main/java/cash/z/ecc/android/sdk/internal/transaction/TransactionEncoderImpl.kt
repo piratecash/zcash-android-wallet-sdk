@@ -146,6 +146,28 @@ internal class TransactionEncoderImpl(
         return txs
     }
 
+    @Throws(TransactionEncoderException.TransactionNotCreatedException::class)
+    override suspend fun createProposedTransactionsDetached(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction> {
+        Twig.debug {
+            "creating detached transactions for proposal"
+        }
+
+        return runCatching {
+            saplingParamFetcher.forceDownload()
+            Twig.debug { "params exist! attempting detached transaction creation..." }
+            backend.createProposedTransactionsDetached(proposal, usk)
+        }.onFailure {
+            Twig.error(it) { "Caught exception while creating detached transaction." }
+        }.onSuccess { result ->
+            Twig.info { "Result of createProposedTransactionsDetached: $result" }
+        }.getOrElse {
+            throw TransactionEncoderException.TransactionNotCreatedException(it)
+        }
+    }
+
     override suspend fun createPcztFromProposal(
         accountUuid: AccountUuid,
         proposal: Proposal

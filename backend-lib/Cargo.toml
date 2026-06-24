@@ -99,6 +99,19 @@ rust-analyzer = "0.0.1"
 #zcash_proofs = { git = "https://github.com/zcash/librustzcash", branch = "main" }
 #zcash_protocol = { git = "https://github.com/zcash/librustzcash", branch = "main" }
 
+[patch.crates-io]
+pczt = { git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+transparent = { package = "zcash_transparent", git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+zcash_address = { git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+zcash_client_backend = { git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+zcash_client_sqlite = { git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+zcash_encoding = { git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+zcash_keys = { git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+zcash_primitives = { git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+zcash_proofs = { git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+zcash_protocol = { git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+zip321 = { git = "https://github.com/piratecash/librustzcash", tag = "zcash_client_backend-0.23.0-pcash.1" }
+
 [lib]
 name = "zcashwalletsdk"
 path = "src/main/rust/lib.rs"

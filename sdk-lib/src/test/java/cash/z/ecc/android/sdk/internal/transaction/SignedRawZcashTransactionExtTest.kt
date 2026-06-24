@@ -1,5 +1,6 @@
 package cash.z.ecc.android.sdk.internal.transaction
 
+import cash.z.ecc.android.sdk.internal.model.EncodedTransaction
 import cash.z.ecc.android.sdk.model.BlockHeight
 import cash.z.ecc.android.sdk.model.FirstClassByteArray
 import cash.z.ecc.android.sdk.model.SignedRawZcashTransaction
@@ -25,4 +26,18 @@ class SignedRawZcashTransactionExtTest {
             assertEquals(txId, submitted.txId)
             assertEquals(expiryHeight, submitted.expiryHeight)
         }
+
+    @Test
+    fun toSignedRawZcashTransaction_detachedBackendOutput_preservesFields() {
+        val raw = FirstClassByteArray(byteArrayOf(0x20, 0x21))
+        val txId = FirstClassByteArray(byteArrayOf(0x03, 0x04))
+        val expiryHeight = BlockHeight.new(2_000)
+        val encoded = EncodedTransaction(txId = txId, raw = raw, expiryHeight = expiryHeight)
+
+        val signed = encoded.toSignedRawZcashTransaction()
+
+        assertEquals(raw, signed.raw)
+        assertEquals(txId, signed.txId)
+        assertEquals(expiryHeight, signed.expiryHeight)
+    }
 }

@@ -1,5 +1,6 @@
 package cash.z.ecc.android.sdk.internal.transaction
 
+import cash.z.ecc.android.sdk.internal.ext.toHexReversed
 import cash.z.ecc.android.sdk.internal.storage.preference.api.PreferenceProvider
 import cash.z.ecc.android.sdk.internal.storage.preference.model.entry.PreferenceKey
 import cash.z.ecc.android.sdk.model.FirstClassByteArray
@@ -8,70 +9,49 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class OfflineTransactionTrackerTest {
     @Test
-    fun markTransactions_newTxId_persistsTxId() =
+    fun markedTransactions_storedTxId_returnsCandidate() =
         runBlocking {
-            val tracker = PreferenceOfflineTransactionTracker(FakePreferenceProvider(), SCOPE)
+            val preferences = FakePreferenceProvider()
+            val tracker = PreferenceOfflineTransactionTracker(preferences, SCOPE)
             val txId = txId(1)
-
-            tracker.markTransactions(listOf(txId))
+            preferences.putString(legacyKey(), txId.legacyTrackerKey())
 
             assertEquals(setOf(txId), tracker.markedTransactions(listOf(txId)))
         }
 
     @Test
-    fun retainTransactions_missingTxId_removesTxId() =
+    fun markedTransactions_missingCandidate_keepsTxIdStored() =
         runBlocking {
-            val tracker = PreferenceOfflineTransactionTracker(FakePreferenceProvider(), SCOPE)
-            val retained = txId(1)
-            val removed = txId(2)
-            tracker.markTransactions(listOf(retained, removed))
+            val preferences = FakePreferenceProvider()
+            val tracker = PreferenceOfflineTransactionTracker(preferences, SCOPE)
+            val queried = txId(1)
+            val notQueried = txId(2)
+            preferences.putString(
+                legacyKey(),
+                listOf(queried, notQueried).joinToString(SEPARATOR) { it.legacyTrackerKey() }
+            )
 
-            tracker.retainTransactions(listOf(retained))
+            val queriedMarked = tracker.markedTransactions(listOf(queried))
+            val notQueriedMarked = tracker.markedTransactions(listOf(notQueried))
 
-            val marked = tracker.markedTransactions(listOf(retained, removed))
-
-            assertTrue(retained in marked)
-            assertFalse(removed in marked)
-        }
-
-    @Test
-    fun retainTransactions_otherTrackerScope_keepsTxId() =
-        runBlocking {
-            val preferenceProvider = FakePreferenceProvider()
-            val firstTracker = PreferenceOfflineTransactionTracker(preferenceProvider, "first")
-            val secondTracker = PreferenceOfflineTransactionTracker(preferenceProvider, "second")
-            val firstTxId = txId(1)
-            val secondTxId = txId(2)
-            firstTracker.markTransactions(listOf(firstTxId))
-
-            secondTracker.retainTransactions(listOf(secondTxId))
-
-            assertTrue(firstTxId in firstTracker.markedTransactions(listOf(firstTxId)))
-        }
-
-    @Test
-    fun withOfflineCreation_runningBlock_reportsInProgress() =
-        runBlocking {
-            val tracker = PreferenceOfflineTransactionTracker(FakePreferenceProvider(), SCOPE)
-            var inProgress = false
-
-            tracker.withOfflineCreation {
-                inProgress = tracker.isOfflineCreationInProgress()
-            }
-
-            assertTrue(inProgress)
-            assertFalse(tracker.isOfflineCreationInProgress())
+            assertTrue(queried in queriedMarked)
+            assertTrue(notQueried in notQueriedMarked)
         }
 
     private fun txId(value: Byte) = FirstClassByteArray(byteArrayOf(value))
 
+    private fun FirstClassByteArray.legacyTrackerKey() = byteArray.toHexReversed()
+
+    private fun legacyKey() = PreferenceKey("${KEY_PREFIX}_$SCOPE")
+
     private companion object {
         private const val SCOPE = "scope"
+        private const val KEY_PREFIX = "offline_created_transaction_ids"
+        private const val SEPARATOR = ","
     }
 }
 

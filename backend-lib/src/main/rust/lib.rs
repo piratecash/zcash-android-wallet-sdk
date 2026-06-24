@@ -50,8 +50,9 @@ use zcash_client_backend::{
         scanning::{ScanPriority, ScanRange},
         wallet::{
             self, create_pczt_from_proposal, create_proposed_transactions,
-            decrypt_and_store_transaction, extract_and_store_transaction_from_pczt,
-            input_selection::GreedyInputSelector, propose_shielding, propose_transfer,
+            create_proposed_transactions_detached, decrypt_and_store_transaction,
+            extract_and_store_transaction_from_pczt, input_selection::GreedyInputSelector,
+            propose_shielding, propose_transfer,
         },
     },
     encoding::AddressCodec,
@@ -407,6 +408,29 @@ fn encode_transaction<'a>(
         "cash/z/ecc/android/sdk/internal/model/JniTransaction",
         "(J[B)V",
         &[JValue::Long(height as jlong), (&java_byte_array).into()],
+    )
+}
+
+struct EncodedTransactionParts {
+    txid: TxId,
+    raw: Vec<u8>,
+    expiry_height: BlockHeight,
+}
+
+fn encode_encoded_transaction<'a>(
+    env: &mut JNIEnv<'a>,
+    transaction: EncodedTransactionParts,
+) -> jni::errors::Result<JObject<'a>> {
+    let txid = env.byte_array_from_slice(transaction.txid.as_ref())?;
+    let raw = env.byte_array_from_slice(&transaction.raw)?;
+    env.new_object(
+        "cash/z/ecc/android/sdk/internal/model/JniEncodedTransaction",
+        "([B[BJ)V",
+        &[
+            (&txid).into(),
+            (&raw).into(),
+            JValue::Long(u32::from(transaction.expiry_height) as jlong),
+        ],
     )
 }
 
@@ -2350,6 +2374,74 @@ pub extern "C" fn Java_cash_z_ecc_android_sdk_internal_jni_RustBackend_createPro
             })?
             .into_raw(),
         )
+    });
+    unwrap_exc_or(&mut env, res, ptr::null_mut())
+}
+
+/// Creates signed transactions from the given proposal without storing them in the wallet DB.
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_cash_z_ecc_android_sdk_internal_jni_RustBackend_createProposedTransactionsDetached<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _: JClass<'local>,
+    db_data: JString<'local>,
+    proposal: JByteArray<'local>,
+    usk: JByteArray<'local>,
+    spend_params: JString<'local>,
+    output_params: JString<'local>,
+    network_id: jint,
+) -> jobjectArray {
+    let res = catch_unwind(&mut env, |env| {
+        let _span = tracing::info_span!("RustBackend.createProposedTransactionsDetached").entered();
+        let network = parse_network(network_id as u32)?;
+        let mut db_data = wallet_db(env, network, db_data)?;
+        let usk = decode_usk(env, usk)?;
+        let spend_params = path_from_jni(env, spend_params)?;
+        let output_params = path_from_jni(env, output_params)?;
+
+        let prover = LocalTxProver::new(&spend_params, &output_params);
+
+        let proposal = Proposal::decode(utils::java_bytes_to_rust(env, &proposal)?.as_slice())
+            .map_err(|e| anyhow!("Invalid proposal: {}", e))?
+            .try_into_standard_proposal(&db_data)?;
+
+        let transactions =
+            create_proposed_transactions_detached::<_, _, Infallible, _, Infallible, _>(
+                &mut db_data,
+                &network,
+                &prover,
+                &prover,
+                &wallet::SpendingKeys::from_unified_spending_key(usk),
+                OvkPolicy::Sender,
+                &proposal,
+                None,
+            )
+            .map_err(|e| anyhow!("Error while creating detached transactions: {}", e))?;
+
+        let encoded_transactions = transactions
+            .into_iter()
+            .map(|tx| {
+                let txid = tx.txid();
+                let expiry_height = tx.expiry_height();
+                let mut raw = Vec::new();
+                tx.write(&mut raw)
+                    .map_err(|e| anyhow!("Error while serializing detached transaction: {}", e))?;
+                Ok(EncodedTransactionParts {
+                    txid,
+                    raw,
+                    expiry_height,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok(utils::rust_vec_to_java(
+            env,
+            encoded_transactions,
+            "cash/z/ecc/android/sdk/internal/model/JniEncodedTransaction",
+            encode_encoded_transaction,
+        )?
+        .into_raw())
     });
     unwrap_exc_or(&mut env, res, ptr::null_mut())
 }

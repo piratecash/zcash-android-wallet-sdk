@@ -38,7 +38,6 @@ class UnminedTransactionResubmitterTest {
 
             resubmitter.resubmit(BlockHeight.new(1_500))
 
-            assertEquals(listOf(offline.txId, online.txId), tracker.retainedTxIds)
             assertEquals(listOf(online.txId), txManager.submittedTxIds)
             assertEquals(listOf(online.txId), repository.requestedEncodedTxIds)
         }
@@ -52,21 +51,6 @@ class UnminedTransactionResubmitterTest {
             val resubmitter = UnminedTransactionResubmitter(repository, txManager, tracker)
 
             resubmitter.resubmit(null)
-
-            assertEquals(0, repository.findUnminedCalls)
-            assertEquals(emptyList(), txManager.submittedTxIds)
-        }
-
-    @Test
-    fun resubmit_offlineCreationInProgress_skipsRepository() =
-        runBlocking {
-            val transaction = transaction(1)
-            val repository = FakeDerivedDataRepository(listOf(overview(transaction)), listOf(transaction))
-            val tracker = SetOfflineTransactionTracker(offlineCreationInProgress = true)
-            val txManager = SubmitOnlyTransactionManager()
-            val resubmitter = UnminedTransactionResubmitter(repository, txManager, tracker)
-
-            resubmitter.resubmit(BlockHeight.new(1_500))
 
             assertEquals(0, repository.findUnminedCalls)
             assertEquals(emptyList(), txManager.submittedTxIds)
@@ -102,24 +86,10 @@ class UnminedTransactionResubmitterTest {
 }
 
 private class SetOfflineTransactionTracker(
-    private val offlineTxIds: Set<FirstClassByteArray> = emptySet(),
-    private val offlineCreationInProgress: Boolean = false
+    private val offlineTxIds: Set<FirstClassByteArray> = emptySet()
 ) : OfflineTransactionTracker {
-    val retainedTxIds = mutableListOf<FirstClassByteArray>()
-
-    override suspend fun markTransactions(txIds: Collection<FirstClassByteArray>) = Unit
-
     override suspend fun markedTransactions(txIds: Collection<FirstClassByteArray>): Set<FirstClassByteArray> =
         txIds.filterTo(mutableSetOf()) { it in offlineTxIds }
-
-    override suspend fun retainTransactions(txIds: Collection<FirstClassByteArray>) {
-        retainedTxIds.clear()
-        retainedTxIds += txIds
-    }
-
-    override suspend fun <T> withOfflineCreation(block: suspend () -> T): T = block()
-
-    override fun isOfflineCreationInProgress(): Boolean = offlineCreationInProgress
 }
 
 private class FakeDerivedDataRepository(

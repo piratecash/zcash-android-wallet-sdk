@@ -94,6 +94,12 @@ internal interface TransactionEncoder {
         usk: UnifiedSpendingKey
     ): List<EncodedTransaction>
 
+    @Throws(TransactionEncoderException.TransactionNotCreatedException::class)
+    suspend fun createProposedTransactionsDetached(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction>
+
     suspend fun createPcztFromProposal(
         accountUuid: AccountUuid,
         proposal: Proposal

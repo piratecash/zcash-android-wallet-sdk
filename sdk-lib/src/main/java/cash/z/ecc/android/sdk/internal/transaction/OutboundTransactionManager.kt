@@ -85,6 +85,11 @@ internal interface OutboundTransactionManager {
         usk: UnifiedSpendingKey
     ): List<EncodedTransaction>
 
+    suspend fun createSignedTransactionsDetached(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction>
+
     /**
      * Submits the transaction represented by [encodedTransaction] to lightwalletd to broadcast to the
      * network and, hopefully, include in the next block.

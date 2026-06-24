@@ -7,6 +7,7 @@ import cash.z.ecc.android.sdk.internal.ext.deleteSuspend
 import cash.z.ecc.android.sdk.internal.model.JniAccount
 import cash.z.ecc.android.sdk.internal.model.JniAccountUsk
 import cash.z.ecc.android.sdk.internal.model.JniBlockMeta
+import cash.z.ecc.android.sdk.internal.model.JniEncodedTransaction
 import cash.z.ecc.android.sdk.internal.model.JniRewindResult
 import cash.z.ecc.android.sdk.internal.model.JniScanRange
 import cash.z.ecc.android.sdk.internal.model.JniScanSummary
@@ -468,6 +469,21 @@ class RustBackend private constructor(
             ).asList()
         }
 
+    override suspend fun createProposedTransactionsDetached(
+        proposal: ProposalUnsafe,
+        unifiedSpendingKey: ByteArray
+    ): List<JniEncodedTransaction> =
+        withContext(SdkDispatchers.DATABASE_IO) {
+            createProposedTransactionsDetached(
+                dataDbFile.absolutePath,
+                proposal.toByteArray(),
+                unifiedSpendingKey,
+                spendParamsPath = saplingSpendFile.absolutePath,
+                outputParamsPath = saplingOutputFile.absolutePath,
+                networkId = networkId
+            ).asList()
+        }
+
     override suspend fun createPcztFromProposal(
         accountUuid: ByteArray,
         proposal: ProposalUnsafe
@@ -906,6 +922,17 @@ class RustBackend private constructor(
             outputParamsPath: String,
             networkId: Int
         ): Array<ByteArray>
+
+        @JvmStatic
+        @Suppress("LongParameterList")
+        private external fun createProposedTransactionsDetached(
+            dbDataPath: String,
+            proposal: ByteArray,
+            usk: ByteArray,
+            spendParamsPath: String,
+            outputParamsPath: String,
+            networkId: Int
+        ): Array<JniEncodedTransaction>
 
         @JvmStatic
         private external fun createPcztFromProposal(

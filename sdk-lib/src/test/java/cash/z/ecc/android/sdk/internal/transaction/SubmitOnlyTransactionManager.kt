@@ -28,6 +28,11 @@ internal class SubmitOnlyTransactionManager(
         usk: UnifiedSpendingKey
     ): List<EncodedTransaction> = unexpected()
 
+    override suspend fun createSignedTransactionsDetached(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction> = unexpected()
+
     override suspend fun proposeTransferFromUri(account: Account, uri: String): Proposal = unexpected()
 
     override suspend fun proposeTransfer(

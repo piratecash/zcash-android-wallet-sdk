@@ -3,6 +3,7 @@ package cash.z.ecc.android.sdk.internal
 import cash.z.ecc.android.sdk.internal.model.JniAccount
 import cash.z.ecc.android.sdk.internal.model.JniAccountUsk
 import cash.z.ecc.android.sdk.internal.model.JniBlockMeta
+import cash.z.ecc.android.sdk.internal.model.JniEncodedTransaction
 import cash.z.ecc.android.sdk.internal.model.JniRewindResult
 import cash.z.ecc.android.sdk.internal.model.JniScanRange
 import cash.z.ecc.android.sdk.internal.model.JniScanSummary
@@ -55,6 +56,11 @@ interface Backend {
         proposal: ProposalUnsafe,
         unifiedSpendingKey: ByteArray
     ): List<ByteArray>
+
+    suspend fun createProposedTransactionsDetached(
+        proposal: ProposalUnsafe,
+        unifiedSpendingKey: ByteArray
+    ): List<JniEncodedTransaction>
 
     /**
      * Creates a partially-created (unsigned without proofs) transaction from the given proposal.
