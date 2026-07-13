@@ -1,6 +1,7 @@
 package cash.z.ecc.android.sdk.internal.transaction
 
 import cash.z.ecc.android.sdk.exception.TransactionEncoderException
+import cash.z.ecc.android.sdk.fixture.UnusedProxyFixture
 import cash.z.ecc.android.sdk.internal.SaplingParamFetcher
 import cash.z.ecc.android.sdk.internal.SaplingParamTool
 import cash.z.ecc.android.sdk.internal.SaplingParamToolProperties
@@ -15,7 +16,6 @@ import cash.z.ecc.android.sdk.model.Proposal
 import cash.z.ecc.android.sdk.model.UnifiedSpendingKey
 import kotlinx.coroutines.runBlocking
 import java.io.File
-import java.lang.reflect.Proxy
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -119,7 +119,7 @@ class TransactionEncoderImplTest {
         private val onlineTxIds: List<FirstClassByteArray> = emptyList(),
         private val detachedTransactions: List<EncodedTransaction> = emptyList(),
         private val detachedFailure: Throwable? = null
-    ) : TypesafeBackend by unusedProxy() {
+    ) : TypesafeBackend by UnusedProxyFixture.new() {
         var onlineCalls = 0
             private set
         var detachedCalls = 0
@@ -145,7 +145,7 @@ class TransactionEncoderImplTest {
 
     private class RecordingDerivedDataRepository(
         private val storedTransactions: Map<FirstClassByteArray, EncodedTransaction> = emptyMap()
-    ) : DerivedDataRepository by unusedProxy() {
+    ) : DerivedDataRepository by UnusedProxyFixture.new() {
         val requestedTxIds = mutableListOf<FirstClassByteArray>()
 
         override suspend fun findEncodedTransactionByTxId(txId: FirstClassByteArray): EncodedTransaction? {
@@ -173,14 +173,5 @@ class TransactionEncoderImplTest {
         private fun fakeProposal() = Proposal.fromByteArray(byteArrayOf(0x10, 0x03))
 
         private fun fakeUsk() = UnifiedSpendingKey(JniUnifiedSpendingKey(byteArrayOf(1)))
-
-        @Suppress("UNCHECKED_CAST")
-        private inline fun <reified T> unusedProxy(): T =
-            Proxy.newProxyInstance(
-                T::class.java.classLoader,
-                arrayOf(T::class.java)
-            ) { _, method, _ ->
-                error("Unexpected ${T::class.simpleName}.${method.name} call")
-            } as T
     }
 }

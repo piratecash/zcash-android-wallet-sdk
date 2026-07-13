@@ -523,8 +523,9 @@ class CompactBlockProcessor internal constructor(
     /**
      * This function process the missing blocks in non-linear order with Spend-before-Sync algorithm.
      */
+    // internal for testability
     @Suppress("ReturnCount", "LongMethod", "CyclomaticComplexMethod")
-    private suspend fun processNewBlocksInSbSOrder(
+    internal suspend fun processNewBlocksInSbSOrder(
         backend: TypesafeBackend,
         downloader: CompactBlockDownloader,
         repository: DerivedDataRepository,
@@ -544,6 +545,12 @@ class CompactBlockProcessor internal constructor(
                 downloader = downloader,
                 lastValidHeight = lastValidHeight
             )
+
+        // The chain tip may have just been advanced (see runSbSSyncingPreparation -> updateChainTip), so refresh
+        // the published balance now, before any scanning happens. This releases any pending change whose
+        // transaction expired against the new tip, instead of leaving it stale until the first scanned batch is
+        // emitted (Success path) or indefinitely (NoMoreBlocksToProcess path, which never scans).
+        refreshWalletSummary()
 
         // Running the unsubmitted transactions check action at the beginning of every sync loop
         resubmitUnminedTransactions(networkHeight.value)
