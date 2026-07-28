@@ -2,9 +2,18 @@ jdk:
   - openjdk17
 
 before_install:
+  # The Ironwood dependency tree exhausted the build agent's disk while
+  # cross-compiling. Report free space around the purge so a future
+  # "No space left on device" is diagnosable from the log alone.
+  - df -h; du -sh /opt/android-sdk-linux/* 2>/dev/null | sort -h | tail -20 || true
+  # Emulator images, extra NDKs and CMake are never used by a library build.
+  - rm -rf /opt/android-sdk-linux/system-images /opt/android-sdk-linux/emulator /opt/android-sdk-linux/ndk /opt/android-sdk-linux/ndk-bundle /opt/android-sdk-linux/cmake /opt/android-sdk-linux/extras /opt/android-sdk-linux/patcher || true
   - export ANDROID_HOME="/opt/android-sdk-linux"; export ANDROID_SDK_ROOT="${ANDROID_HOME}"; curl -sSLo /tmp/android-commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip; unzip -q /tmp/android-commandlinetools.zip -d /tmp/android-commandlinetools; rm -f /tmp/android-commandlinetools.zip; yes | /tmp/android-commandlinetools/cmdline-tools/bin/sdkmanager --sdk_root="${ANDROID_HOME}" "ndk;27.0.12077973"; rm -rf /tmp/android-commandlinetools "${HOME}/.android/cache"
+  # We only cross-compile arm/arm64, so drop the NDK parts no target needs.
+  - NDK="/opt/android-sdk-linux/ndk/27.0.12077973"; SYSROOT="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib"; rm -rf "${NDK}/simpleperf" "${NDK}/shader-tools" "${NDK}/sources" "${SYSROOT}/i686-linux-android" "${SYSROOT}/x86_64-linux-android" "${SYSROOT}/riscv64-linux-android" || true
   - curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92.0 --profile minimal
   - export PATH="${HOME}/.cargo/bin:${PATH}"; rustup default 1.92.0; rustup target add --toolchain 1.92.0 armv7-linux-androideabi aarch64-linux-android
+  - rm -rf "${HOME}"/.rustup/toolchains/*/share/doc || true; df -h
 
 install:
-  - export ANDROID_HOME="/opt/android-sdk-linux"; export ANDROID_SDK_ROOT="${ANDROID_HOME}"; export PATH="${HOME}/.cargo/bin:${PATH}"; export RUST_ANDROID_GRADLE_PYTHON_COMMAND=python3; ./gradlew :lightwallet-client-lib:publishToMavenLocal :backend-lib:publishToMavenLocal :sdk-lib:publishToMavenLocal -PIS_SNAPSHOT=false -PZCASH_SKIP_SIGNING=true -PLIBRARY_VERSION=${VERSION} -PJITPACK_GROUP=com.github.piratecash.zcash-android-wallet-sdk -PZCASH_ANDROID_RUST_TARGETS=arm,arm64
+  - export ANDROID_HOME="/opt/android-sdk-linux"; export ANDROID_SDK_ROOT="${ANDROID_HOME}"; export PATH="${HOME}/.cargo/bin:${PATH}"; export RUST_ANDROID_GRADLE_PYTHON_COMMAND=python3; ./gradlew :lightwallet-client-lib:publishToMavenLocal :backend-lib:publishToMavenLocal :sdk-lib:publishToMavenLocal -PIS_SNAPSHOT=false -PZCASH_SKIP_SIGNING=true -PLIBRARY_VERSION=${VERSION} -PJITPACK_GROUP=com.github.piratecash.zcash-android-wallet-sdk -PZCASH_ANDROID_RUST_TARGETS=arm,arm64; rc=$?; df -h; du -sh "${HOME}"/.cargo "${HOME}"/.gradle backend-lib/target 2>/dev/null; exit $rc
