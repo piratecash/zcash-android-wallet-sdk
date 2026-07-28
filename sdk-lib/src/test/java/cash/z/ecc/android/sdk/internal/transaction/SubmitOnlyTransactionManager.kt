@@ -42,6 +42,8 @@ internal class SubmitOnlyTransactionManager(
         memo: String
     ): Proposal = unexpected()
 
+    override suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal = unexpected()
+
     override suspend fun proposeShielding(
         account: Account,
         shieldingThreshold: Zatoshi,

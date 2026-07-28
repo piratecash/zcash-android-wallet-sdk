@@ -167,6 +167,7 @@ class CompactBlockProcessorTest {
                             AccountBalance(
                                 sapling = WalletBalance(Zatoshi(0), changePending, Zatoshi(0)),
                                 orchard = WalletBalance(Zatoshi(0), Zatoshi(0), Zatoshi(0)),
+                                ironwood = WalletBalance(Zatoshi(0), Zatoshi(0), Zatoshi(0)),
                                 unshielded = Zatoshi(0)
                             )
                     ),
@@ -175,7 +176,8 @@ class CompactBlockProcessorTest {
                 scanProgress = ScanProgress(1, 1),
                 recoveryProgress = null,
                 nextSaplingSubtreeIndex = 0u,
-                nextOrchardSubtreeIndex = 0u
+                nextOrchardSubtreeIndex = 0u,
+                nextIronwoodSubtreeIndex = 0u
             )
         }
     }

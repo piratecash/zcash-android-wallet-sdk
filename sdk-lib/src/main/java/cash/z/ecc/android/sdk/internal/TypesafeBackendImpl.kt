@@ -131,6 +131,11 @@ internal class TypesafeBackendImpl(
             )
         )
 
+    override suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal =
+        Proposal.fromUnsafe(
+            backend.proposeOrchardToIronwoodMigration(account.accountUuid.value)
+        )
+
     override suspend fun proposeShielding(
         account: Account,
         shieldingThreshold: Long,
@@ -327,7 +332,9 @@ internal class TypesafeBackendImpl(
         saplingStartIndex: UInt,
         saplingRoots: List<SubtreeRoot>,
         orchardStartIndex: UInt,
-        orchardRoots: List<SubtreeRoot>
+        orchardRoots: List<SubtreeRoot>,
+        ironwoodStartIndex: UInt,
+        ironwoodRoots: List<SubtreeRoot>
     ) = withWalletDbMutation("putSubtreeRoots") {
         backend.putSubtreeRoots(
             saplingStartIndex = saplingStartIndex.toLong(),
@@ -341,6 +348,14 @@ internal class TypesafeBackendImpl(
             orchardStartIndex = orchardStartIndex.toLong(),
             orchardRoots =
                 orchardRoots.map {
+                    JniSubtreeRoot.new(
+                        rootHash = it.rootHash,
+                        completingBlockHeight = it.completingBlockHeight.value
+                    )
+                },
+            ironwoodStartIndex = ironwoodStartIndex.toLong(),
+            ironwoodRoots =
+                ironwoodRoots.map {
                     JniSubtreeRoot.new(
                         rootHash = it.rootHash,
                         completingBlockHeight = it.completingBlockHeight.value

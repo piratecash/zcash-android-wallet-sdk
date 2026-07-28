@@ -160,6 +160,8 @@ private class BlockingBackend : Backend {
         memo: ByteArray?
     ): ProposalUnsafe = unused()
 
+    override suspend fun proposeOrchardToIronwoodMigration(accountUuid: ByteArray): ProposalUnsafe = unused()
+
     override suspend fun proposeShielding(
         accountUuid: ByteArray,
         shieldingThreshold: Long,
@@ -234,7 +236,9 @@ private class BlockingBackend : Backend {
         saplingStartIndex: Long,
         saplingRoots: List<JniSubtreeRoot>,
         orchardStartIndex: Long,
-        orchardRoots: List<JniSubtreeRoot>
+        orchardRoots: List<JniSubtreeRoot>,
+        ironwoodStartIndex: Long,
+        ironwoodRoots: List<JniSubtreeRoot>
     ) = unused<Unit>()
 
     override suspend fun updateChainTip(height: Long) = unused<Unit>()

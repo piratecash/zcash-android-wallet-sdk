@@ -555,6 +555,7 @@ class SdkSynchronizer private constructor(
                     ZcashProtocol.TRANSPARENT -> TransactionPool.TRANSPARENT
                     ZcashProtocol.SAPLING -> TransactionPool.SAPLING
                     ZcashProtocol.ORCHARD -> TransactionPool.ORCHARD
+                    ZcashProtocol.IRONWOOD -> TransactionPool.IRONWOOD
                 }
             )
         }
@@ -1019,6 +1020,14 @@ class SdkSynchronizer private constructor(
         amount: Zatoshi,
         memo: String
     ): Proposal = txManager.proposeTransfer(account, recipient, amount, memo)
+
+    /**
+     * @throws TransactionEncoderException.ProposalFromParametersException in case the proposal
+     * creation failed
+     */
+    @Throws(TransactionEncoderException.ProposalFromParametersException::class)
+    override suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal =
+        txManager.proposeOrchardToIronwoodMigration(account)
 
     /**
      * @throws TransactionEncoderException.ProposalShieldingException in case the proposal creation failed
