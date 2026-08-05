@@ -16,4 +16,4 @@ before_install:
   - rm -rf "${HOME}"/.rustup/toolchains/*/share/doc || true; df -h
 
 install:
-  - export ANDROID_HOME="/opt/android-sdk-linux"; export ANDROID_SDK_ROOT="${ANDROID_HOME}"; export PATH="${HOME}/.cargo/bin:${PATH}"; export RUST_ANDROID_GRADLE_PYTHON_COMMAND=python3; ./gradlew :lightwallet-client-lib:publishToMavenLocal :backend-lib:publishToMavenLocal :sdk-lib:publishToMavenLocal -PIS_SNAPSHOT=false -PZCASH_SKIP_SIGNING=true -PLIBRARY_VERSION=${VERSION} -PJITPACK_GROUP=com.github.piratecash.zcash-android-wallet-sdk -PZCASH_ANDROID_RUST_TARGETS=arm,arm64; rc=$?; df -h; du -sh "${HOME}"/.cargo "${HOME}"/.gradle backend-lib/target 2>/dev/null; exit $rc
+  - export ANDROID_HOME="/opt/android-sdk-linux"; export ANDROID_SDK_ROOT="${ANDROID_HOME}"; export PATH="${HOME}/.cargo/bin:${PATH}"; export RUST_ANDROID_GRADLE_PYTHON_COMMAND=python3; ./gradlew :lightwallet-client-lib:publishToMavenLocal :backend-lib:publishToMavenLocal :sdk-lib:publishToMavenLocal -PIS_SNAPSHOT=false -PZCASH_SKIP_SIGNING=true -PLIBRARY_VERSION=${VERSION} -PJITPACK_GROUP=com.github.piratecash.zcash-android-wallet-sdk -PZCASH_ANDROID_RUST_TARGETS=arm,arm64
