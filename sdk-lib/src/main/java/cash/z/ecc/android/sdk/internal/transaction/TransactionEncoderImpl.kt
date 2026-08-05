@@ -128,6 +128,7 @@ internal class TransactionEncoderImpl(
         }
 
     @Throws(
+        TransactionEncoderException.MissingParamsException::class,
         TransactionEncoderException.TransactionNotCreatedException::class,
         TransactionEncoderException.TransactionNotFoundException::class,
     )
@@ -139,9 +140,10 @@ internal class TransactionEncoderImpl(
             "creating transactions for proposal"
         }
 
+        saplingParamFetcher.requireParams()
+
         val transactionIds =
             runCatching {
-                saplingParamFetcher.forceDownload()
                 Twig.debug { "params exist! attempting to send..." }
                 backend.createProposedTransactions(proposal, usk)
             }.onFailure {
@@ -161,7 +163,10 @@ internal class TransactionEncoderImpl(
         return txs
     }
 
-    @Throws(TransactionEncoderException.TransactionNotCreatedException::class)
+    @Throws(
+        TransactionEncoderException.MissingParamsException::class,
+        TransactionEncoderException.TransactionNotCreatedException::class,
+    )
     override suspend fun createProposedTransactionsDetached(
         proposal: Proposal,
         usk: UnifiedSpendingKey
@@ -170,8 +175,9 @@ internal class TransactionEncoderImpl(
             "creating detached transactions for proposal"
         }
 
+        saplingParamFetcher.requireParams()
+
         return runCatching {
-            saplingParamFetcher.forceDownload()
             Twig.debug { "params exist! attempting detached transaction creation..." }
             backend.createProposedTransactionsDetached(proposal, usk)
         }.onFailure {

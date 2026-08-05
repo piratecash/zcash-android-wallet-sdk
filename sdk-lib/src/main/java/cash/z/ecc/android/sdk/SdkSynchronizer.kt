@@ -1043,6 +1043,7 @@ class SdkSynchronizer private constructor(
     ): Proposal? = txManager.proposeShielding(account, shieldingThreshold, memo, transparentReceiver)
 
     @Throws(
+        TransactionEncoderException.MissingParamsException::class,
         TransactionEncoderException.TransactionNotCreatedException::class,
         TransactionEncoderException.TransactionNotFoundException::class
     )
@@ -1055,6 +1056,10 @@ class SdkSynchronizer private constructor(
         return transactionSubmitSequencer.submit(txManager.createProposedTransactions(proposal, usk))
     }
 
+    @Throws(
+        TransactionEncoderException.MissingParamsException::class,
+        TransactionEncoderException.TransactionNotCreatedException::class
+    )
     override suspend fun createSignedTransactions(
         proposal: Proposal,
         usk: UnifiedSpendingKey

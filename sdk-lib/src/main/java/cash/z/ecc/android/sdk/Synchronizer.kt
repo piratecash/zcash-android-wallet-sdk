@@ -9,6 +9,7 @@ import cash.z.ecc.android.sdk.exception.PcztException
 import cash.z.ecc.android.sdk.exception.RustLayerException
 import cash.z.ecc.android.sdk.exception.TorInitializationErrorException
 import cash.z.ecc.android.sdk.exception.TorUnavailableException
+import cash.z.ecc.android.sdk.exception.TransactionEncoderException
 import cash.z.ecc.android.sdk.ext.ZcashSdk
 import cash.z.ecc.android.sdk.internal.FastestServerFetcher
 import cash.z.ecc.android.sdk.internal.Files
@@ -371,7 +372,11 @@ interface Synchronizer {
      * @return a flow of result objects for the transactions that were created as part of
      *         the proposal, indicating whether they were submitted to the network or if
      *         an error occurred.
+     *
+     * @throws TransactionEncoderException.MissingParamsException when the Sapling proving
+     * parameters are absent and could not be downloaded.
      */
+    @Throws(TransactionEncoderException.MissingParamsException::class)
     suspend fun createProposedTransactions(
         proposal: Proposal,
         usk: UnifiedSpendingKey
@@ -382,7 +387,11 @@ interface Synchronizer {
      *
      * The returned transactions are excluded from the SDK's automatic unmined transaction
      * resubmission loop on this device. They can be submitted later with [submitRawTransaction].
+     *
+     * @throws TransactionEncoderException.MissingParamsException when the Sapling proving
+     * parameters are absent and could not be downloaded.
      */
+    @Throws(TransactionEncoderException.MissingParamsException::class)
     suspend fun createSignedTransactions(
         proposal: Proposal,
         usk: UnifiedSpendingKey

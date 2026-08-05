@@ -12,6 +12,7 @@ import cash.z.ecc.android.sdk.internal.model.JniUnifiedSpendingKey
 import cash.z.ecc.android.sdk.internal.repository.DerivedDataRepository
 import cash.z.ecc.android.sdk.model.BlockHeight
 import cash.z.ecc.android.sdk.model.FirstClassByteArray
+import cash.z.ecc.android.sdk.model.Pczt
 import cash.z.ecc.android.sdk.model.Proposal
 import cash.z.ecc.android.sdk.model.UnifiedSpendingKey
 import kotlinx.coroutines.runBlocking
@@ -74,41 +75,118 @@ class TransactionEncoderImplTest {
             assertEquals(emptyList(), repository.requestedTxIds)
         }
 
+    @Test
+    fun createProposedTransactions_paramsUnavailable_throwsMissingParamsWithoutCallingBackend() =
+        runBlocking {
+            val backend = RecordingTypesafeBackend()
+            val repository = RecordingDerivedDataRepository()
+            val encoder = transactionEncoder(backend, repository, unavailableSaplingParamFetcher(backend))
+
+            assertFailsWith<TransactionEncoderException.MissingParamsException> {
+                encoder.createProposedTransactions(fakeProposal(), fakeUsk())
+            }
+
+            assertEquals(0, backend.onlineCalls)
+            assertEquals(emptyList(), repository.requestedTxIds)
+        }
+
+    @Test
+    fun createProposedTransactionsDetached_paramsUnavailable_throwsMissingParamsWithoutCallingBackend() =
+        runBlocking {
+            val backend = RecordingTypesafeBackend()
+            val repository = RecordingDerivedDataRepository()
+            val encoder = transactionEncoder(backend, repository, unavailableSaplingParamFetcher(backend))
+
+            assertFailsWith<TransactionEncoderException.MissingParamsException> {
+                encoder.createProposedTransactionsDetached(fakeProposal(), fakeUsk())
+            }
+
+            assertEquals(0, backend.detachedCalls)
+            assertEquals(emptyList(), repository.requestedTxIds)
+        }
+
+    @Test
+    fun createProposedTransactions_backendFailure_throwsTransactionNotCreated() =
+        runBlocking {
+            val failure = IllegalStateException("online failed")
+            val backend = RecordingTypesafeBackend(onlineFailure = failure)
+            val repository = RecordingDerivedDataRepository()
+            val encoder = transactionEncoder(backend, repository)
+
+            val exception =
+                assertFailsWith<TransactionEncoderException.TransactionNotCreatedException> {
+                    encoder.createProposedTransactions(fakeProposal(), fakeUsk())
+                }
+
+            assertSame(failure, exception.rootCause)
+            assertEquals(1, backend.onlineCalls)
+            assertEquals(emptyList(), repository.requestedTxIds)
+        }
+
+    @Test
+    fun addProofsToPczt_paramsUnavailable_stillReachesBackend() =
+        runBlocking {
+            val proved = Pczt(byteArrayOf(9))
+            val backend = RecordingTypesafeBackend(provedPczt = proved)
+            val repository = RecordingDerivedDataRepository()
+            val encoder = transactionEncoder(backend, repository, unavailableSaplingParamFetcher(backend))
+
+            val result = encoder.addProofsToPczt(Pczt(byteArrayOf(8)))
+
+            assertSame(proved, result)
+            assertEquals(1, backend.addProofsCalls)
+        }
+
     private fun transactionEncoder(
         backend: RecordingTypesafeBackend,
-        repository: RecordingDerivedDataRepository
+        repository: RecordingDerivedDataRepository,
+        saplingParamFetcher: SaplingParamFetcher = testSaplingParamFetcher(backend)
     ) =
         TransactionEncoderImpl(
             backend = backend,
-            saplingParamFetcher = testSaplingParamFetcher(backend),
+            saplingParamFetcher = saplingParamFetcher,
             repository = repository
         )
 
     private fun testSaplingParamFetcher(backend: TypesafeBackend): SaplingParamFetcher {
         val paramsDir = Files.createTempDirectory("zcash-params").toFile()
-        val legacyDir = File(paramsDir, "legacy")
+        return saplingParamFetcher(backend, presenceDirectory = paramsDir, validationDirectory = paramsDir)
+    }
+
+    /**
+     * Builds a fetcher whose params are permanently unavailable, without touching the network:
+     * the files it checks for presence exist, so no download is attempted, while the directory it
+     * validates afterwards is empty - which is what [SaplingParamTool.ensureParams] reports as
+     * [TransactionEncoderException.MissingParamsException].
+     */
+    private fun unavailableSaplingParamFetcher(backend: TypesafeBackend) =
+        saplingParamFetcher(
+            backend = backend,
+            presenceDirectory = Files.createTempDirectory("zcash-params-present").toFile(),
+            validationDirectory = Files.createTempDirectory("zcash-params-empty").toFile()
+        )
+
+    private fun saplingParamFetcher(
+        backend: TypesafeBackend,
+        presenceDirectory: File,
+        validationDirectory: File
+    ): SaplingParamFetcher {
         val params =
-            listOf(
+            listOf(SaplingParamTool.SPEND_PARAM_FILE_NAME, SaplingParamTool.OUTPUT_PARAM_FILE_NAME).map { fileName ->
                 SaplingParameters(
-                    destinationDirectory = paramsDir,
-                    fileName = SaplingParamTool.SPEND_PARAM_FILE_NAME,
-                    fileMaxSizeBytes = 0,
-                    fileHash = ""
-                ),
-                SaplingParameters(
-                    destinationDirectory = paramsDir,
-                    fileName = SaplingParamTool.OUTPUT_PARAM_FILE_NAME,
+                    destinationDirectory = presenceDirectory,
+                    fileName = fileName,
                     fileMaxSizeBytes = 0,
                     fileHash = ""
                 )
-            )
-        params.forEach { File(paramsDir, it.fileName).writeBytes(byteArrayOf()) }
+            }
+        params.forEach { File(presenceDirectory, it.fileName).writeBytes(byteArrayOf()) }
         return SaplingParamFetcher(
             SaplingParamTool(
                 SaplingParamToolProperties(
                     saplingParams = params,
-                    paramsDirectory = paramsDir,
-                    paramsLegacyDirectory = legacyDir
+                    paramsDirectory = validationDirectory,
+                    paramsLegacyDirectory = File(presenceDirectory, "legacy")
                 )
             ),
             backend
@@ -118,11 +196,15 @@ class TransactionEncoderImplTest {
     private class RecordingTypesafeBackend(
         private val onlineTxIds: List<FirstClassByteArray> = emptyList(),
         private val detachedTransactions: List<EncodedTransaction> = emptyList(),
-        private val detachedFailure: Throwable? = null
+        private val onlineFailure: Throwable? = null,
+        private val detachedFailure: Throwable? = null,
+        private val provedPczt: Pczt = Pczt(byteArrayOf())
     ) : TypesafeBackend by UnusedProxyFixture.new() {
         var onlineCalls = 0
             private set
         var detachedCalls = 0
+            private set
+        var addProofsCalls = 0
             private set
 
         override suspend fun createProposedTransactions(
@@ -130,6 +212,7 @@ class TransactionEncoderImplTest {
             usk: UnifiedSpendingKey
         ): List<FirstClassByteArray> {
             onlineCalls++
+            onlineFailure?.let { throw it }
             return onlineTxIds
         }
 
@@ -140,6 +223,11 @@ class TransactionEncoderImplTest {
             detachedCalls++
             detachedFailure?.let { throw it }
             return detachedTransactions
+        }
+
+        override suspend fun addProofsToPczt(pczt: Pczt): Pczt {
+            addProofsCalls++
+            return provedPczt
         }
     }
 

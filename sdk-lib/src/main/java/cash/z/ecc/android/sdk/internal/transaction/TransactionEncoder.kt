@@ -88,10 +88,13 @@ internal interface TransactionEncoder {
      *
      * @return the successfully encoded transactions or an exception
      *
+     * @throws TransactionEncoderException.MissingParamsException when the Sapling proving
+     * parameters are absent and could not be downloaded.
      * @throws TransactionEncoderException.TransactionNotCreatedException
      * @throws TransactionEncoderException.TransactionNotFoundException
      */
     @Throws(
+        TransactionEncoderException.MissingParamsException::class,
         TransactionEncoderException.TransactionNotCreatedException::class,
         TransactionEncoderException.TransactionNotFoundException::class,
     )
@@ -100,7 +103,22 @@ internal interface TransactionEncoder {
         usk: UnifiedSpendingKey
     ): List<EncodedTransaction>
 
-    @Throws(TransactionEncoderException.TransactionNotCreatedException::class)
+    /**
+     * Creates the transactions in the given proposal without submitting them to the network.
+     *
+     * @param proposal the proposal to create.
+     * @param usk the unified spending key associated with the notes that will be spent.
+     *
+     * @return the successfully encoded transactions or an exception
+     *
+     * @throws TransactionEncoderException.MissingParamsException when the Sapling proving
+     * parameters are absent and could not be downloaded.
+     * @throws TransactionEncoderException.TransactionNotCreatedException
+     */
+    @Throws(
+        TransactionEncoderException.MissingParamsException::class,
+        TransactionEncoderException.TransactionNotCreatedException::class,
+    )
     suspend fun createProposedTransactionsDetached(
         proposal: Proposal,
         usk: UnifiedSpendingKey
