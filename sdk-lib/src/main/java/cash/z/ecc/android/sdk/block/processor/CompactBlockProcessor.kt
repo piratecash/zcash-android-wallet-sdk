@@ -37,6 +37,7 @@ import cash.z.ecc.android.sdk.internal.ext.isNullOrEmpty
 import cash.z.ecc.android.sdk.internal.ext.isScanContinuityError
 import cash.z.ecc.android.sdk.internal.ext.length
 import cash.z.ecc.android.sdk.internal.ext.overlaps
+import cash.z.ecc.android.sdk.internal.ext.rethrowIfCancellation
 import cash.z.ecc.android.sdk.internal.ext.retryUpToAndContinue
 import cash.z.ecc.android.sdk.internal.ext.retryUpToAndThrow
 import cash.z.ecc.android.sdk.internal.ext.retryWithBackoff
@@ -505,6 +506,15 @@ class CompactBlockProcessor internal constructor(
         }
         consecutiveBlockProcessingErrors.getAndIncrement()
         return false
+    }
+
+    /**
+     * Clears the state left over by a cancelled synchronization so that [start] can run again. Unlike
+     * [stop], it keeps the downloader alive.
+     */
+    internal suspend fun resetStateForRestart() {
+        resetErrorCounters()
+        setState(State.Initializing)
     }
 
     /**
@@ -997,6 +1007,7 @@ class CompactBlockProcessor internal constructor(
                 }.onFailure {
                     Twig.error { "Unable to obtain server info due to: ${it.message}" }
                 }.getOrElse {
+                    it.rethrowIfCancellation()
                     reportSetupException(it as CompactBlockProcessorException)
                     setState(State.Disconnected)
                     return
@@ -2061,6 +2072,7 @@ class CompactBlockProcessor internal constructor(
                 }.onFailure {
                     Twig.error(it) { "Failed to get transaction data requests" }
                 }.getOrElse {
+                    it.rethrowIfCancellation()
                     emit(
                         SyncingResult.EnhanceFailed(
                             range.start,
@@ -2601,7 +2613,13 @@ class CompactBlockProcessor internal constructor(
      * @return true when processing should continue. Return false when the error is unrecoverable
      * and all processing should halt and stop retrying.
      */
-    private fun onProcessorError(throwable: Throwable): Boolean = onProcessorErrorListener?.invoke(throwable) ?: true
+    private fun onProcessorError(throwable: Throwable): Boolean =
+        // Cancellation is a pause or a close, not a sync failure: veto the retry so it propagates.
+        if (throwable is CancellationException) {
+            false
+        } else {
+            onProcessorErrorListener?.invoke(throwable) ?: true
+        }
 
     private fun onProcessorErrorResolved() = onProcessorErrorResolved?.invoke()
 

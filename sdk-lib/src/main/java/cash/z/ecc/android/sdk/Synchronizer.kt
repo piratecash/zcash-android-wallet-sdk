@@ -78,6 +78,27 @@ interface Synchronizer {
     val status: Flow<Status>
 
     /**
+     * The lifecycle of this Synchronizer. Unlike [Status], it distinguishes a resumable pause from a
+     * terminal stop, both of which report [Status.STOPPED].
+     */
+    val lifecycleState: StateFlow<LifecycleState>
+
+    /**
+     * Stops all network activity while keeping the locally stored transactions and balances
+     * readable. Resume with [resumeSync]. Does nothing unless the Synchronizer is
+     * [LifecycleState.Running].
+     */
+    suspend fun pauseSync()
+
+    /**
+     * Resumes the synchronization stopped by [pauseSync].
+     *
+     * @return false when there is nothing to resume — the Synchronizer is terminally stopped or
+     * closed and the caller has to create a new instance.
+     */
+    suspend fun resumeSync(): Boolean
+
+    /**
      * Indicates the download progress of the Synchronizer.
      *
      * When progress reaches `PercentDecimal.ONE_HUNDRED_PERCENT`, it signals that the Synchronizer
@@ -813,6 +834,34 @@ interface Synchronizer {
         SYNCED
     }
 
+    /**
+     * Lifecycle of this Synchronizer. [Status.STOPPED] alone cannot tell a resumable pause from a
+     * terminal stop, because a failed block processor reports the very same status.
+     */
+    enum class LifecycleState {
+        /**
+         * Synchronization is running, or is about to after construction with `autoStart`.
+         */
+        Running,
+
+        /**
+         * Synchronization is stopped by [pauseSync] and can be brought back with [resumeSync]. The
+         * locally stored data stays readable.
+         */
+        Paused,
+
+        /**
+         * The block processor failed terminally. The Synchronizer cannot be resumed; create a new
+         * instance instead.
+         */
+        TerminallyStopped,
+
+        /**
+         * [Closeable.close] has been called. Terminal.
+         */
+        Closed
+    }
+
     enum class InitializationError {
         /**
          * Indicates that tor is required but not available.
@@ -854,6 +903,11 @@ interface Synchronizer {
          * @throws InitializerException.SeedRequired Indicates clients need to call this method again, providing the
          * seed bytes.
          *
+         * @param autoStart when false, the synchronizer performs no chain synchronization and starts in
+         * [LifecycleState.Paused]; the locally stored data stays readable and [resumeSync] brings synchronization up.
+         * Two construction-time exceptions remain: an enabled Tor is still bootstrapped here, and a
+         * [WalletInitMode.RestoreWallet] gets no recover-until height, so start a restore with autoStart on.
+         *
          * @throws IllegalStateException If multiple instances of synchronizer with the same network+alias are
          * active at the same time.  Call `close` to finish one synchronizer before starting another one with the same
          * network+alias.
@@ -862,6 +916,9 @@ interface Synchronizer {
          * [DefaultSynchronizerFactory].
          */
         @Suppress("LongParameterList", "LongMethod", "TooGenericExceptionCaught")
+        // JvmOverloads keeps the pre-autoStart signature, which callers compiled against the
+        // previous release still link to.
+        @JvmOverloads
         suspend fun new(
             alias: String = ZcashSdk.DEFAULT_ALIAS,
             birthday: BlockHeight?,
@@ -871,7 +928,8 @@ interface Synchronizer {
             walletInitMode: WalletInitMode,
             zcashNetwork: ZcashNetwork,
             isTorEnabled: Boolean,
-            isExchangeRateEnabled: Boolean
+            isExchangeRateEnabled: Boolean,
+            autoStart: Boolean = true
         ): CloseableSynchronizer {
             val applicationContext = context.applicationContext
 
@@ -947,8 +1005,15 @@ interface Synchronizer {
             val downloader = DefaultSynchronizerFactory.defaultDownloader(walletClient, blockStore)
 
             val chainTip =
-                when (walletInitMode) {
-                    is RestoreWallet -> {
+                when {
+                    // Fetching the chain tip is a network call. Without it the recovery progress
+                    // denominator stays unknown until the first sync, which is the same legal branch
+                    // as a failed fetch.
+                    !autoStart -> {
+                        null
+                    }
+
+                    walletInitMode is RestoreWallet -> {
                         when (
                             val response = downloader.getLatestBlockHeight(sdkFlags ifTor ServiceMode.UniqueTor)
                         ) {
@@ -1020,7 +1085,8 @@ interface Synchronizer {
                 torClient = torClient,
                 walletClient = walletClient,
                 walletClientFactory = walletClientFactory,
-                sdkFlags = sdkFlags
+                sdkFlags = sdkFlags,
+                autoStart = autoStart
             )
         }
 
@@ -1031,6 +1097,7 @@ interface Synchronizer {
          * This is a blocking call, so it should not be called from the main thread.
          */
         @JvmStatic
+        @JvmOverloads
         @Suppress("LongParameterList")
         fun newBlocking(
             alias: String = ZcashSdk.DEFAULT_ALIAS,
@@ -1041,7 +1108,8 @@ interface Synchronizer {
             walletInitMode: WalletInitMode,
             zcashNetwork: ZcashNetwork,
             isTorEnabled: Boolean,
-            isExchangeRateEnabled: Boolean
+            isExchangeRateEnabled: Boolean,
+            autoStart: Boolean = true
         ): CloseableSynchronizer =
             runBlocking {
                 new(
@@ -1053,7 +1121,8 @@ interface Synchronizer {
                     walletInitMode = walletInitMode,
                     zcashNetwork = zcashNetwork,
                     isTorEnabled = isTorEnabled,
-                    isExchangeRateEnabled = isExchangeRateEnabled
+                    isExchangeRateEnabled = isExchangeRateEnabled,
+                    autoStart = autoStart
                 )
             }
 

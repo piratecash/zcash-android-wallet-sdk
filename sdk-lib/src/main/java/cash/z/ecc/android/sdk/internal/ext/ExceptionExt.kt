@@ -1,6 +1,12 @@
 package cash.z.ecc.android.sdk.internal.ext
 
 import cash.z.ecc.android.sdk.internal.Twig
+import kotlinx.coroutines.CancellationException
+
+/** [runCatching] also catches coroutine cancellation, which must never be handled as a failure. */
+internal fun Throwable.rethrowIfCancellation() {
+    if (this is CancellationException) throw this
+}
 
 @Suppress("SwallowedException", "TooGenericExceptionCaught")
 internal inline fun <R> tryNull(block: () -> R): R? =
