@@ -1,6 +1,7 @@
 package cash.z.ecc.android.sdk
 
 import android.content.Context
+import cash.z.ecc.android.sdk.Synchronizer.LifecycleState
 import cash.z.ecc.android.sdk.Synchronizer.Status.DISCONNECTED
 import cash.z.ecc.android.sdk.Synchronizer.Status.INITIALIZING
 import cash.z.ecc.android.sdk.Synchronizer.Status.STOPPED
@@ -12,6 +13,7 @@ import cash.z.ecc.android.sdk.block.processor.CompactBlockProcessor.State.Initia
 import cash.z.ecc.android.sdk.block.processor.CompactBlockProcessor.State.Stopped
 import cash.z.ecc.android.sdk.block.processor.CompactBlockProcessor.State.Synced
 import cash.z.ecc.android.sdk.block.processor.CompactBlockProcessor.State.Syncing
+import cash.z.ecc.android.sdk.block.processor.UnminedTransactionResubmitter
 import cash.z.ecc.android.sdk.exception.CompactBlockProcessorException
 import cash.z.ecc.android.sdk.exception.InitializeException
 import cash.z.ecc.android.sdk.exception.TorInitializationErrorException
@@ -24,12 +26,14 @@ import cash.z.ecc.android.sdk.internal.SaplingParamTool
 import cash.z.ecc.android.sdk.internal.Twig
 import cash.z.ecc.android.sdk.internal.TypesafeBackend
 import cash.z.ecc.android.sdk.internal.TypesafeBackendImpl
+import cash.z.ecc.android.sdk.internal.WalletDbMutationGate
 import cash.z.ecc.android.sdk.internal.block.CompactBlockDownloader
 import cash.z.ecc.android.sdk.internal.db.DatabaseCoordinator
 import cash.z.ecc.android.sdk.internal.db.derived.DbDerivedDataRepository
 import cash.z.ecc.android.sdk.internal.db.derived.DerivedDataDb
 import cash.z.ecc.android.sdk.internal.exchange.UsdExchangeRateFetcher
 import cash.z.ecc.android.sdk.internal.ext.existsSuspend
+import cash.z.ecc.android.sdk.internal.ext.rethrowIfCancellation
 import cash.z.ecc.android.sdk.internal.ext.tryNull
 import cash.z.ecc.android.sdk.internal.jni.RustBackend
 import cash.z.ecc.android.sdk.internal.model.Checkpoint
@@ -46,10 +50,15 @@ import cash.z.ecc.android.sdk.internal.storage.preference.EncryptedPreferencePro
 import cash.z.ecc.android.sdk.internal.storage.preference.StandardPreferenceProvider
 import cash.z.ecc.android.sdk.internal.storage.preference.api.PreferenceProvider
 import cash.z.ecc.android.sdk.internal.storage.preference.keys.StandardPreferenceKeys.SDK_VERSION_OF_LAST_FIX_WITNESSES_CALL
+import cash.z.ecc.android.sdk.internal.transaction.OfflineTransactionTracker
 import cash.z.ecc.android.sdk.internal.transaction.OutboundTransactionManager
 import cash.z.ecc.android.sdk.internal.transaction.OutboundTransactionManagerImpl
+import cash.z.ecc.android.sdk.internal.transaction.PreferenceOfflineTransactionTracker
 import cash.z.ecc.android.sdk.internal.transaction.TransactionEncoder
 import cash.z.ecc.android.sdk.internal.transaction.TransactionEncoderImpl
+import cash.z.ecc.android.sdk.internal.transaction.TransactionSubmitSequencer
+import cash.z.ecc.android.sdk.internal.transaction.toEncodedTransaction
+import cash.z.ecc.android.sdk.internal.transaction.toSignedRawZcashTransaction
 import cash.z.ecc.android.sdk.model.Account
 import cash.z.ecc.android.sdk.model.AccountCreateSetup
 import cash.z.ecc.android.sdk.model.AccountImportSetup
@@ -63,6 +72,7 @@ import cash.z.ecc.android.sdk.model.Pczt
 import cash.z.ecc.android.sdk.model.PercentDecimal
 import cash.z.ecc.android.sdk.model.Proposal
 import cash.z.ecc.android.sdk.model.SdkFlags
+import cash.z.ecc.android.sdk.model.SignedRawZcashTransaction
 import cash.z.ecc.android.sdk.model.SingleUseTransparentAddress
 import cash.z.ecc.android.sdk.model.TransactionId
 import cash.z.ecc.android.sdk.model.TransactionOutput
@@ -96,8 +106,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -109,19 +121,25 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -158,6 +176,8 @@ class SdkSynchronizer private constructor(
     private val walletClientFactory: WalletClientFactory,
     private val sdkFlags: SdkFlags
 ) : CloseableSynchronizer {
+    private val transactionSubmitSequencer = TransactionSubmitSequencer(txManager)
+
     companion object {
         private sealed class InstanceState {
             data object Active : InstanceState()
@@ -196,7 +216,8 @@ class SdkSynchronizer private constructor(
             torClient: TorClient?,
             walletClient: CombinedWalletClient,
             walletClientFactory: WalletClientFactory,
-            sdkFlags: SdkFlags
+            sdkFlags: SdkFlags,
+            autoStart: Boolean = true
         ): CloseableSynchronizer {
             val synchronizerKey = SynchronizerKey(zcashNetwork, alias)
             return mutex.withLock {
@@ -217,8 +238,24 @@ class SdkSynchronizer private constructor(
                     walletClientFactory = walletClientFactory,
                     sdkFlags = sdkFlags
                 ).apply {
+                    if (!autoStart) {
+                        // Paused setup runs before registration: a throwing setDormant() would
+                        // otherwise leave the alias marked Active with no synchronizer to close it.
+
+                        // Construction bootstraps Tor in NORMAL mode, so a paused instance has to
+                        // park it the same way pauseSync() does.
+                        torClient?.setDormant(TorDormantMode.SOFT)
+                        // The same status pauseSync() publishes: a resumable pause is STOPPED, while
+                        // the initial DISCONNECTED would read as a connection failure.
+                        _status.value = STOPPED
+                        // start() is what normally publishes the stored balances; without this a
+                        // wallet opened paused reports null balances until it first goes online.
+                        refreshAllBalances()
+                    }
                     instances[synchronizerKey] = InstanceState.Active
-                    start()
+                    if (autoStart) {
+                        start()
+                    }
                 }
             }
         }
@@ -286,6 +323,14 @@ class SdkSynchronizer private constructor(
 
     private val _status = MutableStateFlow(DISCONNECTED)
 
+    private val _lifecycleState = MutableStateFlow(LifecycleState.Paused)
+
+    /** Serializes [pauseSync] and [resumeSync] so neither can overwrite the other's [syncJob]. */
+    private val lifecycleMutex = Mutex()
+
+    @Volatile
+    private var syncJob: Job? = null
+
     val coroutineScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     override val walletBalances = processor.walletBalances.asStateFlow()
@@ -297,11 +342,18 @@ class SdkSynchronizer private constructor(
     @OptIn(ExperimentalCoroutinesApi::class)
     override val exchangeRateUsd =
         channelFlow {
-            refreshExchangeRateUsd
+            // The pause signal is merged into the upstream so that flatMapLatest cancels a fetch
+            // already in flight — its retry loop would otherwise keep issuing Tor requests.
+            val pauseSignals = _lifecycleState.drop(1).filter { it != LifecycleState.Running }.map { }
+            merge(refreshExchangeRateUsd, pauseSignals)
                 .onStart { emit(Unit) }
                 .flatMapLatest {
                     flow {
-                        if (fetchExchangeChangeUsd == null) {
+                        // This flow lives on coroutineScope, not syncJob, so pausing must be checked
+                        // here or a refresh would keep fetching over Tor while networking is paused.
+                        if (fetchExchangeChangeUsd == null ||
+                            _lifecycleState.value != LifecycleState.Running
+                        ) {
                             emit(lastExchangeRateValue)
                         } else {
                             emit(lastExchangeRateValue.copy(isLoading = true))
@@ -358,6 +410,8 @@ class SdkSynchronizer private constructor(
      * then emits a [SYNCED] status.
      */
     override val status = _status.asStateFlow()
+
+    override val lifecycleState = _lifecycleState.asStateFlow()
 
     /**
      * Indicates the download progress of the Synchronizer.
@@ -441,25 +495,97 @@ class SdkSynchronizer private constructor(
     override suspend fun getFastestServers(servers: List<LightWalletEndpoint>) = fetchFastestServers(servers)
 
     internal fun start() {
-        coroutineScope.onReady()
+        _lifecycleState.value = LifecycleState.Running
+        syncJob = launchSync()
+    }
+
+    // supervisorScope keeps onReady()'s coroutines root-like, so their CoroutineExceptionHandlers
+    // still receive critical errors, while cancelling syncJob stops all of them at once.
+    private fun launchSync(): Job = coroutineScope.launch { supervisorScope { onReady() } }
+
+    override suspend fun pauseSync() =
+        lifecycleMutex.withLock {
+            if (_lifecycleState.value != LifecycleState.Running) return@withLock
+
+            // Once the job is cancelled the transition has to complete: a caller cancelled during
+            // the join would otherwise leave a jobless synchronizer still reported as Running.
+            withContext(NonCancellable) {
+                // Stay Running until the job is really gone: a collector that saw Paused early would
+                // be told networking had stopped while a non-cooperative native call was running.
+                syncJob?.cancelAndJoin()
+                syncJob = null
+                _status.value = STOPPED
+                torClient?.setDormant(TorDormantMode.SOFT)
+                // Cancelling the job leaves the processor in whatever state it was in; only fail()
+                // and close() reach Stopped. A terminal failure that raced this pause would
+                // otherwise be hidden behind a resumable Paused.
+                val pausedState =
+                    if (processor.state.value is Stopped) {
+                        LifecycleState.TerminallyStopped
+                    } else {
+                        LifecycleState.Paused
+                    }
+                // Compare-and-set so a close() that ran during the join keeps its terminal Closed.
+                _lifecycleState.compareAndSet(LifecycleState.Running, pausedState)
+                Twig.info { "Synchronizer $synchronizerKey paused" }
+            }
+        }
+
+    override suspend fun resumeSync(): Boolean =
+        lifecycleMutex.withLock {
+            if (!_lifecycleState.compareAndSet(LifecycleState.Paused, LifecycleState.Running)) return@withLock false
+
+            // Symmetric with pauseSync(): once Running is published the transition has to finish.
+            // Waking Tor suspends, and a caller cancelled there would leave a live syncJob behind
+            // a resume that reported failure — networking running while the API says paused.
+            withContext(NonCancellable) {
+                // The reset has to happen before the coroutines start, because they read the
+                // processor state right away.
+                processor.resetStateForRestart()
+                syncJob = launchSync()
+                torClient?.setDormant(TorDormantMode.NORMAL)
+                // Last, so nothing else follows it: close() publishes Closed without the mutex, and
+                // a resume that raced it must undo its restart rather than report success.
+                if (_lifecycleState.value == LifecycleState.Closed) {
+                    // Shutdown waits on this mutex, so the job has to be gone before it is released
+                    // — otherwise the processor and clients are disposed under still-running work.
+                    syncJob?.cancelAndJoin()
+                    syncJob = null
+                    false
+                } else {
+                    true
+                }
+            }
+        }
+
+    /**
+     * Publishes [LifecycleState.Closed] and starts disposal, returning the job that performs it.
+     *
+     * Neither terminal entry point can suspend, so disposal runs as a job that takes
+     * [lifecycleMutex] — otherwise it would tear the Tor client out from under a pause or resume.
+     */
+    private fun launchShutdown(): Job {
+        _lifecycleState.value = LifecycleState.Closed
+
+        val shutdownJob =
+            coroutineScope.launch {
+                Twig.info { "Stopping synchronizer $synchronizerKey…" }
+                lifecycleMutex.withLock {
+                    processor.stop()
+                    torClient?.dispose()
+                    walletClient.dispose()
+                    fetchExchangeChangeUsd?.dispose()
+                }
+            }
+
+        instances[synchronizerKey] = InstanceState.ShuttingDown(shutdownJob)
+        return shutdownJob
     }
 
     override fun close() {
         // Note that stopping will continue asynchronously.  Race conditions with starting a new synchronizer are
         // avoided with a delay during startup.
-
-        val shutdownJob =
-            coroutineScope.launch {
-                Twig.info { "Stopping synchronizer $synchronizerKey…" }
-                processor.stop()
-                torClient?.dispose()
-                walletClient.dispose()
-                fetchExchangeChangeUsd?.dispose()
-            }
-
-        instances[synchronizerKey] = InstanceState.ShuttingDown(shutdownJob)
-
-        shutdownJob.invokeOnCompletion {
+        launchShutdown().invokeOnCompletion {
             coroutineScope.cancel()
             _status.value = STOPPED
             Twig.debug { "Synchronizer $synchronizerKey stopped" }
@@ -474,18 +600,7 @@ class SdkSynchronizer private constructor(
      */
     fun closeFlow(): Flow<Unit> =
         callbackFlow {
-            val shutdownJob =
-                coroutineScope.launch {
-                    Twig.info { "Stopping synchronizer $synchronizerKey…" }
-                    processor.stop()
-                    torClient?.dispose()
-                    walletClient.dispose()
-                    fetchExchangeChangeUsd?.dispose()
-                }
-
-            instances[synchronizerKey] = InstanceState.ShuttingDown(shutdownJob)
-
-            shutdownJob.invokeOnCompletion {
+            launchShutdown().invokeOnCompletion {
                 coroutineScope.cancel()
                 _status.value = STOPPED
                 Twig.info { "Synchronizer $synchronizerKey stopped" }
@@ -545,6 +660,7 @@ class SdkSynchronizer private constructor(
                     ZcashProtocol.TRANSPARENT -> TransactionPool.TRANSPARENT
                     ZcashProtocol.SAPLING -> TransactionPool.SAPLING
                     ZcashProtocol.ORCHARD -> TransactionPool.ORCHARD
+                    ZcashProtocol.IRONWOOD -> TransactionPool.IRONWOOD
                 }
             )
         }
@@ -606,12 +722,31 @@ class SdkSynchronizer private constructor(
     }
 
     override fun onBackground() {
-        coroutineScope.launch { torClient?.setDormant(TorDormantMode.SOFT) }
+        coroutineScope.launch { setTorDormancy(TorDormantMode.SOFT) }
     }
 
     override fun onForeground() {
-        coroutineScope.launch { torClient?.setDormant(TorDormantMode.NORMAL) }
+        coroutineScope.launch { setTorDormancy(TorDormantMode.NORMAL) }
     }
+
+    // Under the mutex, and re-reading the state inside the coroutine: a callback queued while Running
+    // must not wake Tor after a pause completed, nor touch a client close() is disposing.
+    private suspend fun setTorDormancy(mode: TorDormantMode) =
+        lifecycleMutex.withLock {
+            val allowed =
+                when (_lifecycleState.value) {
+                    LifecycleState.Running -> true
+
+                    // Parking is always safe, and an autoStart=false instance never passes through
+                    // pauseSync(), so backgrounding is its only chance to park Tor. Waking it back
+                    // up, on the other hand, is resumeSync()'s job alone.
+                    LifecycleState.Paused, LifecycleState.TerminallyStopped -> mode == TorDormantMode.SOFT
+
+                    LifecycleState.Closed -> false
+                }
+            if (!allowed) return@withLock
+            torClient?.setDormant(mode)
+        }
 
     //
     // Storage APIs
@@ -700,6 +835,11 @@ class SdkSynchronizer private constructor(
             dataMaintenance()
         }
 
+        val mempoolJob =
+            launch {
+                processor.startObservingMempool()
+            }
+
         launch(CoroutineExceptionHandler(::onCriticalError)) {
             processor.onProcessorErrorListener = ::onProcessorError
             processor.onProcessorErrorResolved = ::onProcessorErrorResolved
@@ -719,6 +859,12 @@ class SdkSynchronizer private constructor(
                         }
 
                         is Stopped -> {
+                            // Only fail() and close() reach Stopped — cancelling this collector cannot —
+                            // so a Stopped seen while Running can only come from the processor failing.
+                            _lifecycleState.compareAndSet(
+                                LifecycleState.Running,
+                                LifecycleState.TerminallyStopped
+                            )
                             STOPPED
                         }
 
@@ -733,13 +879,30 @@ class SdkSynchronizer private constructor(
                         _status.value = synchronizerStatus
                     }
                 }.launchIn(this)
-            processor.start()
+            @Suppress("TooGenericExceptionCaught")
+            try {
+                processor.start()
+            } catch (error: Throwable) {
+                // Our pause/close cancels the whole sync scope; a cancellation while that scope is
+                // still active came from the state collector above and leaves the processor dead.
+                if (!this@onReady.isActive) error.rethrowIfCancellation()
+                markProcessorTerminallyStopped(mempoolJob)
+                throw error
+            }
             Twig.debug { "Completed starting synchronizer" }
         }
+    }
 
-        launch {
-            processor.startObservingMempool()
-        }
+    /**
+     * A rethrowing [CompactBlockProcessor.start] skips the processor's own stop(), so the Stopped
+     * branch never publishes and a dead processor would stay reported as Running.
+     */
+    private fun markProcessorTerminallyStopped(mempoolJob: Job) {
+        _lifecycleState.compareAndSet(LifecycleState.Running, LifecycleState.TerminallyStopped)
+        // supervisorScope keeps the siblings alive, so the mempool observer would keep polling a
+        // synchronizer that already refuses to resume.
+        mempoolJob.cancel()
+        _status.value = STOPPED
     }
 
     @Suppress("UNUSED_PARAMETER")
@@ -922,6 +1085,7 @@ class SdkSynchronizer private constructor(
         }.onFailure {
             Twig.error(it) { "Get wallet accounts failed." }
         }.getOrElse {
+            it.rethrowIfCancellation()
             throw InitializeException.GetAccountsException(it)
         }
 
@@ -1011,6 +1175,14 @@ class SdkSynchronizer private constructor(
     ): Proposal = txManager.proposeTransfer(account, recipient, amount, memo)
 
     /**
+     * @throws TransactionEncoderException.ProposalFromParametersException in case the proposal
+     * creation failed
+     */
+    @Throws(TransactionEncoderException.ProposalFromParametersException::class)
+    override suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal =
+        txManager.proposeOrchardToIronwoodMigration(account)
+
+    /**
      * @throws TransactionEncoderException.ProposalShieldingException in case the proposal creation failed
      *
      * @return the proposal or an exception
@@ -1024,6 +1196,7 @@ class SdkSynchronizer private constructor(
     ): Proposal? = txManager.proposeShielding(account, shieldingThreshold, memo, transparentReceiver)
 
     @Throws(
+        TransactionEncoderException.MissingParamsException::class,
         TransactionEncoderException.TransactionNotCreatedException::class,
         TransactionEncoderException.TransactionNotFoundException::class
     )
@@ -1033,29 +1206,22 @@ class SdkSynchronizer private constructor(
     ): Flow<TransactionSubmitResult> {
         // Internally, this logic submits and checks every incoming transaction, and once [Failure] or
         // [NotAttempted] submission result occurs, it returns [NotAttempted] for the rest of them
-        var anySubmissionFailed = false
-        return txManager
-            .createProposedTransactions(proposal, usk)
-            .asFlow()
-            .map { transaction ->
-                if (anySubmissionFailed) {
-                    TransactionSubmitResult.NotAttempted(transaction.txId)
-                } else {
-                    val submission = txManager.submit(transaction)
-                    when (submission) {
-                        is TransactionSubmitResult.Success -> {
-                            // Expected state
-                        }
-
-                        is TransactionSubmitResult.Failure,
-                        is TransactionSubmitResult.NotAttempted -> {
-                            anySubmissionFailed = true
-                        }
-                    }
-                    submission
-                }
-            }
+        return transactionSubmitSequencer.submit(txManager.createProposedTransactions(proposal, usk))
     }
+
+    @Throws(
+        TransactionEncoderException.MissingParamsException::class,
+        TransactionEncoderException.TransactionNotCreatedException::class
+    )
+    override suspend fun createSignedTransactions(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<SignedRawZcashTransaction> =
+        txManager.createSignedTransactionsDetached(proposal, usk)
+            .map { it.toSignedRawZcashTransaction() }
+
+    override suspend fun submitRawTransaction(transaction: SignedRawZcashTransaction): TransactionSubmitResult =
+        txManager.submit(transaction.toEncodedTransaction())
 
     override suspend fun createPcztFromProposal(
         accountUuid: AccountUuid,
@@ -1290,16 +1456,19 @@ internal object DefaultSynchronizerFactory {
         network: ZcashNetwork,
         alias: String,
         saplingParamTool: SaplingParamTool,
-        coordinator: DatabaseCoordinator
+        coordinator: DatabaseCoordinator,
+        walletDbMutationGate: WalletDbMutationGate
     ): TypesafeBackend =
         TypesafeBackendImpl(
-            RustBackend.new(
-                coordinator.fsBlockDbRoot(network, alias),
-                coordinator.dataDbFile(network, alias),
-                saplingOutputFile = saplingParamTool.outputParamsFile,
-                saplingSpendFile = saplingParamTool.spendParamsFile,
-                zcashNetworkId = network.id
-            )
+            backend =
+                RustBackend.new(
+                    coordinator.fsBlockDbRoot(network, alias),
+                    coordinator.dataDbFile(network, alias),
+                    saplingOutputFile = saplingParamTool.outputParamsFile,
+                    saplingSpendFile = saplingParamTool.spendParamsFile,
+                    zcashNetworkId = network.id
+                ),
+            walletDbMutationGate = walletDbMutationGate
         )
 
     @Suppress("LongParameterList")
@@ -1356,16 +1525,22 @@ internal object DefaultSynchronizerFactory {
         birthdayHeight: BlockHeight,
         txManager: OutboundTransactionManager,
         sdkFlags: SdkFlags,
-        saplingParamFetcher: SaplingParamFetcher
+        saplingParamFetcher: SaplingParamFetcher,
+        offlineTransactionTracker: OfflineTransactionTracker
     ): CompactBlockProcessor =
         CompactBlockProcessor(
             backend = backend,
             downloader = downloader,
             minimumHeight = birthdayHeight,
             repository = repository,
-            txManager = txManager,
             sdkFlags = sdkFlags,
-            saplingParamFetcher = saplingParamFetcher
+            saplingParamFetcher = saplingParamFetcher,
+            unminedTransactionResubmitter =
+                UnminedTransactionResubmitter(
+                    repository = repository,
+                    txManager = txManager,
+                    offlineTransactionTracker = offlineTransactionTracker
+                )
         )
 }
 

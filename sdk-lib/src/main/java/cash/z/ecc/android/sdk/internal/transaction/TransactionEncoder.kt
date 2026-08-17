@@ -49,6 +49,12 @@ internal interface TransactionEncoder {
     ): Proposal
 
     /**
+     * Creates a proposal migrating the account's entire Orchard balance into Ironwood.
+     */
+    @Throws(TransactionEncoderException.ProposalFromParametersException::class)
+    suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal
+
+    /**
      * Creates a proposal for shielding any transparent funds sent to the given account.
      *
      * @param account the account for which to shield funds.
@@ -82,14 +88,38 @@ internal interface TransactionEncoder {
      *
      * @return the successfully encoded transactions or an exception
      *
+     * @throws TransactionEncoderException.MissingParamsException when the Sapling proving
+     * parameters are absent and could not be downloaded.
      * @throws TransactionEncoderException.TransactionNotCreatedException
      * @throws TransactionEncoderException.TransactionNotFoundException
      */
     @Throws(
+        TransactionEncoderException.MissingParamsException::class,
         TransactionEncoderException.TransactionNotCreatedException::class,
         TransactionEncoderException.TransactionNotFoundException::class,
     )
     suspend fun createProposedTransactions(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction>
+
+    /**
+     * Creates the transactions in the given proposal without submitting them to the network.
+     *
+     * @param proposal the proposal to create.
+     * @param usk the unified spending key associated with the notes that will be spent.
+     *
+     * @return the successfully encoded transactions or an exception
+     *
+     * @throws TransactionEncoderException.MissingParamsException when the Sapling proving
+     * parameters are absent and could not be downloaded.
+     * @throws TransactionEncoderException.TransactionNotCreatedException
+     */
+    @Throws(
+        TransactionEncoderException.MissingParamsException::class,
+        TransactionEncoderException.TransactionNotCreatedException::class,
+    )
+    suspend fun createProposedTransactionsDetached(
         proposal: Proposal,
         usk: UnifiedSpendingKey
     ): List<EncodedTransaction>

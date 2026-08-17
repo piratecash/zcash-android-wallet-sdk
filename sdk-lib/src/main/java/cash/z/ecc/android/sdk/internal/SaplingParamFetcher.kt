@@ -1,6 +1,8 @@
 package cash.z.ecc.android.sdk.internal
 
+import cash.z.ecc.android.sdk.exception.TransactionEncoderException
 import cash.z.ecc.android.sdk.model.Zatoshi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -30,24 +32,45 @@ internal class SaplingParamFetcher(
                         }
 
                 if (needsSaplingParams) {
-                    retryAndContinue {
-                        saplingParamTool.ensureParams(saplingParamTool.properties.paramsDirectory)
-                    }
+                    retryAndContinue { ensureParams() }
                 }
             } catch (e: Exception) {
                 Twig.error(e) { "Caught exception while fetching sapling params." }
             }
         }
 
-    @Suppress("TooGenericExceptionCaught")
+    @Suppress("TooGenericExceptionCaught", "RethrowCaughtException")
     suspend fun forceDownload() =
         mutex.withLock {
             try {
-                saplingParamTool.ensureParams(saplingParamTool.properties.paramsDirectory)
+                ensureParams()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Twig.error(e) { "Caught exception while fetching sapling params." }
             }
         }
+
+    /**
+     * Same as [forceDownload], but reports missing proving parameters to the caller instead of
+     * swallowing them, so the UI can explain why signing is impossible.
+     */
+    @Suppress("TooGenericExceptionCaught", "RethrowCaughtException")
+    suspend fun requireParams() =
+        mutex.withLock {
+            try {
+                ensureParams()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: TransactionEncoderException) {
+                Twig.error(e) { "Sapling params are unavailable." }
+                throw TransactionEncoderException.MissingParamsException
+            } catch (e: Exception) {
+                Twig.error(e) { "Caught exception while fetching sapling params." }
+            }
+        }
+
+    private suspend fun ensureParams() = saplingParamTool.ensureParams(saplingParamTool.properties.paramsDirectory)
 
     private suspend inline fun retryAndContinue(block: () -> Unit) {
         var failedAttempts = 0

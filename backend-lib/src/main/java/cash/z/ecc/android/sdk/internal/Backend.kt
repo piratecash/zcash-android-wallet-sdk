@@ -3,6 +3,7 @@ package cash.z.ecc.android.sdk.internal
 import cash.z.ecc.android.sdk.internal.model.JniAccount
 import cash.z.ecc.android.sdk.internal.model.JniAccountUsk
 import cash.z.ecc.android.sdk.internal.model.JniBlockMeta
+import cash.z.ecc.android.sdk.internal.model.JniEncodedTransaction
 import cash.z.ecc.android.sdk.internal.model.JniRewindResult
 import cash.z.ecc.android.sdk.internal.model.JniScanRange
 import cash.z.ecc.android.sdk.internal.model.JniScanSummary
@@ -36,6 +37,15 @@ interface Backend {
     ): ProposalUnsafe
 
     /**
+     * Proposes migrating the account's entire Orchard balance into the Ironwood pool.
+     *
+     * @throws RuntimeException if NU6.3 is not active, if any Orchard note is not yet
+     * spendable, or as a common indicator of the operation failure
+     */
+    @Throws(RuntimeException::class)
+    suspend fun proposeOrchardToIronwoodMigration(accountUuid: ByteArray): ProposalUnsafe
+
+    /**
      * @throws RuntimeException as a common indicator of the operation failure
      */
     @Throws(RuntimeException::class)
@@ -55,6 +65,11 @@ interface Backend {
         proposal: ProposalUnsafe,
         unifiedSpendingKey: ByteArray
     ): List<ByteArray>
+
+    suspend fun createProposedTransactionsDetached(
+        proposal: ProposalUnsafe,
+        unifiedSpendingKey: ByteArray
+    ): List<JniEncodedTransaction>
 
     /**
      * Creates a partially-created (unsigned without proofs) transaction from the given proposal.
@@ -262,11 +277,14 @@ interface Backend {
      * @throws RuntimeException as a common indicator of the operation failure
      */
     @Throws(RuntimeException::class)
+    @Suppress("LongParameterList")
     suspend fun putSubtreeRoots(
         saplingStartIndex: Long,
         saplingRoots: List<JniSubtreeRoot>,
         orchardStartIndex: Long,
         orchardRoots: List<JniSubtreeRoot>,
+        ironwoodStartIndex: Long,
+        ironwoodRoots: List<JniSubtreeRoot>,
     )
 
     /**

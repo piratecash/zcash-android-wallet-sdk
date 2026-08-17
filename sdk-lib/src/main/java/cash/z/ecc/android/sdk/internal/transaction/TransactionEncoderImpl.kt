@@ -65,6 +65,21 @@ internal class TransactionEncoderImpl(
     }
 
     @Throws(TransactionEncoderException.ProposalFromParametersException::class)
+    override suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal {
+        Twig.debug { "creating proposal to migrate the Orchard balance into Ironwood" }
+
+        return runCatching {
+            backend.proposeOrchardToIronwoodMigration(account)
+        }.onSuccess {
+            Twig.info { "Result of proposeOrchardToIronwoodMigration: ${it.toPrettyString()}" }
+        }.onFailure {
+            Twig.error(it) { "Caught exception while creating the migration proposal." }
+        }.getOrElse {
+            throw TransactionEncoderException.ProposalFromParametersException(it)
+        }
+    }
+
+    @Throws(TransactionEncoderException.ProposalFromParametersException::class)
     override suspend fun proposeTransfer(
         account: Account,
         recipient: String,
@@ -113,6 +128,7 @@ internal class TransactionEncoderImpl(
         }
 
     @Throws(
+        TransactionEncoderException.MissingParamsException::class,
         TransactionEncoderException.TransactionNotCreatedException::class,
         TransactionEncoderException.TransactionNotFoundException::class,
     )
@@ -124,9 +140,10 @@ internal class TransactionEncoderImpl(
             "creating transactions for proposal"
         }
 
+        saplingParamFetcher.requireParams()
+
         val transactionIds =
             runCatching {
-                saplingParamFetcher.forceDownload()
                 Twig.debug { "params exist! attempting to send..." }
                 backend.createProposedTransactions(proposal, usk)
             }.onFailure {
@@ -144,6 +161,32 @@ internal class TransactionEncoderImpl(
             }
 
         return txs
+    }
+
+    @Throws(
+        TransactionEncoderException.MissingParamsException::class,
+        TransactionEncoderException.TransactionNotCreatedException::class,
+    )
+    override suspend fun createProposedTransactionsDetached(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction> {
+        Twig.debug {
+            "creating detached transactions for proposal"
+        }
+
+        saplingParamFetcher.requireParams()
+
+        return runCatching {
+            Twig.debug { "params exist! attempting detached transaction creation..." }
+            backend.createProposedTransactionsDetached(proposal, usk)
+        }.onFailure {
+            Twig.error(it) { "Caught exception while creating detached transaction." }
+        }.onSuccess { result ->
+            Twig.info { "Result of createProposedTransactionsDetached: $result" }
+        }.getOrElse {
+            throw TransactionEncoderException.TransactionNotCreatedException(it)
+        }
     }
 
     override suspend fun createPcztFromProposal(

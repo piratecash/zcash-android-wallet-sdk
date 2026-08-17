@@ -6,6 +6,95 @@ and this library adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0-rc.2] - 2026-07-26
+
+### Fixed
+- Hardware-wallet signing of post-NU6.3 (v6) transactions: the wallet-controlled zero-value
+  Orchard spends that pad such transactions now carry ZIP 32 derivation metadata (via
+  `zcash_client_backend 0.24.0-rc.4`), so signers can identify and sign them. Previously these
+  actions were unsignable and v6 sends failed at finalization with
+  `Pczt(Extraction(Orchard(Extract(MissingSpendAuthSig))))` even though the device approved the
+  transaction.
+
+## [2.7.0-rc.2] - 2026-07-26
+
+### Changed
+- `addProofsToPczt` now reuses a cached Orchard proving key (via `zcash_primitives`'
+  `cached_orchard_proving_key`) instead of rebuilding it for every proof, so proving a PCZT with
+  both Orchard and Ironwood bundles no longer constructs the key twice.
+
+### Fixed
+- `addProofsToPczt` now creates Ironwood proofs. It previously only handled Orchard and Sapling,
+  so any PCZT with Ironwood Actions (e.g. a Keystone-signed spend from the Ironwood pool) failed
+  at extraction with `Pczt(Extraction(Ironwood(Extract(MissingProof))))`.
+- Hardware-wallet (Keystone) PCZT signing now sends the full (non-compacted) signer view in the
+  minimal PCZT encoding (v1 for v5 transactions). The compact view/v2-encoding wire contract is
+  not supported by deployed firmware's ordinary signing flow, and caused finalization failures
+  with `MissingSpendAuthSig`.
+
+## [2.7.0-rc.1] - 2026-07-25
+
+### Added
+- Ironwood (NU6.3) shielded pool support: the SDK now exposes the Ironwood pool
+  (balance, subtree roots, sync) alongside Sapling and Orchard.
+- `Synchronizer.proposeOrchardToIronwoodMigration`, which builds a proposal that
+  moves the account's entire Orchard balance across the NU6.3 turnstile into the
+  Ironwood pool.
+- `CompactBlockProcessorException.MismatchedConsensusBranch`, `MismatchedNetwork`
+  and `MismatchedSaplingActivationHeight` now expose their constructor arguments
+  as public `val`s (`clientBranchId`/`serverBranchId`,
+  `clientNetwork`/`serverNetwork`, `clientHeight`/`serverHeight`). Previously the
+  mismatched values were reachable only by parsing the exception's `message`, so
+  consumers had to either scrape English prose or surface it verbatim. Wallets
+  can now render a localized, structured explanation of why a server is
+  incompatible. Note that consensus branch IDs are opaque unordered constants:
+  neither the SDK nor a consumer can infer from them alone which side is stale.
+
+  **This migration is not private.** It produces a single transaction whose value
+  is the account's entire Orchard balance, so any chain observer can read that
+  balance off the chain. The SDK deliberately does not split the crossing into
+  less-identifying denominations. Wallets should surface this in the confirmation
+  UI rather than presenting the migration as a routine self-send.
+
+### Breaking changes
+
+Adding the Ironwood pool changes several public types. Downstream consumers will
+need source changes:
+
+- `AccountBalance` gains a required `ironwood: WalletBalance` property, in third
+  position, before `unshielded`. Positional construction will not compile.
+- `CompactBlockUnsafe` gains a required `ironwoodOutputsCount: UInt` constructor
+  parameter, before `compactBlockBytes`.
+- `TransactionPool` and `ShieldedProtocolEnum` each gain an `IRONWOOD` case, so
+  exhaustive `when` expressions over them stop compiling until the new case is
+  handled.
+- `Synchronizer` gains an abstract `proposeOrchardToIronwoodMigration`, which any
+  implementer or test fake must now provide.
+
+The lightwallet protocol definitions are now vendored from
+[zcash/lightwallet-protocol](https://github.com/zcash/lightwallet-protocol) at
+v0.5.0 rather than maintained by hand, which changes the generated
+`cash.z.wallet.sdk.internal.rpc` types. The SDK itself uses none of the
+following, but consumers touching the generated gRPC types directly will:
+
+- `CompactTx.hash` is renamed to `CompactTx.txid`, so `getHash()`/`setHash()`
+  become `getTxid()`/`setTxid()`.
+- `CompactBlock.protoVersion` is removed; field 1 is now reserved.
+- The `Exclude` message is replaced by `GetMempoolTxRequest`, changing the
+  `GetMempoolTx` RPC signature.
+
+Additive in the same update: a `PoolType` enum, `BlockRange.poolTypes`, the
+`CompactTxIn` and `TxOut` messages with `CompactTx.vin`/`vout`, four new
+`LightdInfo` fields, and a `GetTaddressTransactions` RPC. `GetBlockNullifiers`
+and `GetBlockRangeNullifiers` are now deprecated upstream in favour of
+`GetBlockRange` with `poolTypes`.
+
+### Changed
+- Migrated to the `zcash_client_backend 0.24` / `zcash_client_sqlite 0.22` API
+  line, adapting the backend to the send-max and builder API changes.
+- Updated the librustzcash crates to their published releases,
+  `zcash_client_backend 0.24.0-rc.2` and `zcash_client_sqlite 0.22.0-rc.2`.
+
 ## [2.5.2] - 2026-06-03
 
 ### Changed

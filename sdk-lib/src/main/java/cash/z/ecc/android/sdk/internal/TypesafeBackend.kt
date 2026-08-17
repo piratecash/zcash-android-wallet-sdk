@@ -3,6 +3,7 @@ package cash.z.ecc.android.sdk.internal
 import cash.z.ecc.android.sdk.exception.InitializeException
 import cash.z.ecc.android.sdk.exception.PcztException
 import cash.z.ecc.android.sdk.exception.RustLayerException
+import cash.z.ecc.android.sdk.internal.model.EncodedTransaction
 import cash.z.ecc.android.sdk.internal.model.JniBlockMeta
 import cash.z.ecc.android.sdk.internal.model.RewindResult
 import cash.z.ecc.android.sdk.internal.model.ScanRange
@@ -65,6 +66,11 @@ internal interface TypesafeBackend {
         memo: ByteArray? = null
     ): Proposal
 
+    /**
+     * Proposes migrating the account's entire Orchard balance into the Ironwood pool.
+     */
+    suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal
+
     suspend fun proposeShielding(
         account: Account,
         shieldingThreshold: Long,
@@ -76,6 +82,11 @@ internal interface TypesafeBackend {
         proposal: Proposal,
         usk: UnifiedSpendingKey
     ): List<FirstClassByteArray>
+
+    suspend fun createProposedTransactionsDetached(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction>
 
     /**
      * Creates a partially-created (unsigned without proofs) transaction from the given proposal.
@@ -195,11 +206,14 @@ internal interface TypesafeBackend {
      * @throws RuntimeException as a common indicator of the operation failure
      */
     @Throws(RuntimeException::class)
+    @Suppress("LongParameterList")
     suspend fun putSubtreeRoots(
         saplingStartIndex: UInt,
         saplingRoots: List<SubtreeRoot>,
         orchardStartIndex: UInt,
         orchardRoots: List<SubtreeRoot>,
+        ironwoodStartIndex: UInt,
+        ironwoodRoots: List<SubtreeRoot>,
     )
 
     /**

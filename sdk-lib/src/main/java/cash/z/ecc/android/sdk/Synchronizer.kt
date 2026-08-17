@@ -9,17 +9,20 @@ import cash.z.ecc.android.sdk.exception.PcztException
 import cash.z.ecc.android.sdk.exception.RustLayerException
 import cash.z.ecc.android.sdk.exception.TorInitializationErrorException
 import cash.z.ecc.android.sdk.exception.TorUnavailableException
+import cash.z.ecc.android.sdk.exception.TransactionEncoderException
 import cash.z.ecc.android.sdk.ext.ZcashSdk
 import cash.z.ecc.android.sdk.internal.FastestServerFetcher
 import cash.z.ecc.android.sdk.internal.Files
 import cash.z.ecc.android.sdk.internal.SaplingParamFetcher
 import cash.z.ecc.android.sdk.internal.SaplingParamTool
 import cash.z.ecc.android.sdk.internal.Twig
+import cash.z.ecc.android.sdk.internal.WalletDbMutationGate
 import cash.z.ecc.android.sdk.internal.db.DatabaseCoordinator
 import cash.z.ecc.android.sdk.internal.exchange.UsdExchangeRateFetcher
 import cash.z.ecc.android.sdk.internal.model.TorClient
 import cash.z.ecc.android.sdk.internal.model.ext.toBlockHeight
 import cash.z.ecc.android.sdk.internal.storage.preference.StandardPreferenceProvider
+import cash.z.ecc.android.sdk.internal.transaction.PreferenceOfflineTransactionTracker
 import cash.z.ecc.android.sdk.model.Account
 import cash.z.ecc.android.sdk.model.AccountBalance
 import cash.z.ecc.android.sdk.model.AccountCreateSetup
@@ -32,6 +35,7 @@ import cash.z.ecc.android.sdk.model.Pczt
 import cash.z.ecc.android.sdk.model.PercentDecimal
 import cash.z.ecc.android.sdk.model.Proposal
 import cash.z.ecc.android.sdk.model.SdkFlags
+import cash.z.ecc.android.sdk.model.SignedRawZcashTransaction
 import cash.z.ecc.android.sdk.model.SingleUseTransparentAddress
 import cash.z.ecc.android.sdk.model.TransactionId
 import cash.z.ecc.android.sdk.model.TransactionOutput
@@ -72,6 +76,27 @@ interface Synchronizer {
      * value will be emitted by this flow.
      */
     val status: Flow<Status>
+
+    /**
+     * The lifecycle of this Synchronizer. Unlike [Status], it distinguishes a resumable pause from a
+     * terminal stop, both of which report [Status.STOPPED].
+     */
+    val lifecycleState: StateFlow<LifecycleState>
+
+    /**
+     * Stops all network activity while keeping the locally stored transactions and balances
+     * readable. Resume with [resumeSync]. Does nothing unless the Synchronizer is
+     * [LifecycleState.Running].
+     */
+    suspend fun pauseSync()
+
+    /**
+     * Resumes the synchronization stopped by [pauseSync].
+     *
+     * @return false when there is nothing to resume — the Synchronizer is terminally stopped or
+     * closed and the caller has to create a new instance.
+     */
+    suspend fun resumeSync(): Boolean
 
     /**
      * Indicates the download progress of the Synchronizer.
@@ -295,6 +320,32 @@ interface Synchronizer {
     ): Proposal
 
     /**
+     * Creates a proposal migrating the account's entire Orchard balance into the Ironwood
+     * pool, introduced by NU6.3.
+     *
+     * The proposal spends every Orchard note the account holds and sends the maximum to the
+     * account's own internal receiver, with the fee computed so that no change is left in
+     * Orchard. Sapling and transparent funds are not touched.
+     *
+     * This is deliberately all-or-nothing: if any Orchard note is not yet spendable the
+     * proposal fails rather than migrating part of the balance and reporting success. After
+     * NU6.3 the Orchard turnstile forbids adding value back to the Orchard pool, so funds
+     * left behind would be stranded in a pool the wallet is leaving.
+     *
+     * Note this reveals the account's Orchard balance on-chain: the migration is a single
+     * transaction of exactly that value. It does not attempt to split the crossing into
+     * less-identifying amounts.
+     *
+     * @param account the account whose Orchard funds to migrate.
+     *
+     * @return the proposal or an exception
+     *
+     * @throws TransactionEncoderException.ProposalFromParametersException if NU6.3 is not
+     * active, if any Orchard note is not yet spendable, or if the proposal cannot be created
+     */
+    suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal
+
+    /**
      * Creates a proposal for fulfilling a payment ZIP-321 URI
      *
      * @param account the account from which to transfer funds.
@@ -342,11 +393,35 @@ interface Synchronizer {
      * @return a flow of result objects for the transactions that were created as part of
      *         the proposal, indicating whether they were submitted to the network or if
      *         an error occurred.
+     *
+     * @throws TransactionEncoderException.MissingParamsException when the Sapling proving
+     * parameters are absent and could not be downloaded.
      */
+    @Throws(TransactionEncoderException.MissingParamsException::class)
     suspend fun createProposedTransactions(
         proposal: Proposal,
         usk: UnifiedSpendingKey
     ): Flow<TransactionSubmitResult>
+
+    /**
+     * Creates and signs the transactions in the given proposal without submitting them.
+     *
+     * The returned transactions are excluded from the SDK's automatic unmined transaction
+     * resubmission loop on this device. They can be submitted later with [submitRawTransaction].
+     *
+     * @throws TransactionEncoderException.MissingParamsException when the Sapling proving
+     * parameters are absent and could not be downloaded.
+     */
+    @Throws(TransactionEncoderException.MissingParamsException::class)
+    suspend fun createSignedTransactions(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<SignedRawZcashTransaction>
+
+    /**
+     * Submits an already signed raw transaction without requiring local spend authority.
+     */
+    suspend fun submitRawTransaction(transaction: SignedRawZcashTransaction): TransactionSubmitResult
 
     /**
      * Creates a partially-created (unsigned without proofs) transaction from the given proposal.
@@ -759,6 +834,34 @@ interface Synchronizer {
         SYNCED
     }
 
+    /**
+     * Lifecycle of this Synchronizer. [Status.STOPPED] alone cannot tell a resumable pause from a
+     * terminal stop, because a failed block processor reports the very same status.
+     */
+    enum class LifecycleState {
+        /**
+         * Synchronization is running, or is about to after construction with `autoStart`.
+         */
+        Running,
+
+        /**
+         * Synchronization is stopped by [pauseSync] and can be brought back with [resumeSync]. The
+         * locally stored data stays readable.
+         */
+        Paused,
+
+        /**
+         * The block processor failed terminally. The Synchronizer cannot be resumed; create a new
+         * instance instead.
+         */
+        TerminallyStopped,
+
+        /**
+         * [Closeable.close] has been called. Terminal.
+         */
+        Closed
+    }
+
     enum class InitializationError {
         /**
          * Indicates that tor is required but not available.
@@ -800,6 +903,11 @@ interface Synchronizer {
          * @throws InitializerException.SeedRequired Indicates clients need to call this method again, providing the
          * seed bytes.
          *
+         * @param autoStart when false, the synchronizer performs no chain synchronization and starts in
+         * [LifecycleState.Paused]; the locally stored data stays readable and [resumeSync] brings synchronization up.
+         * Two construction-time exceptions remain: an enabled Tor is still bootstrapped here, and a
+         * [WalletInitMode.RestoreWallet] gets no recover-until height, so start a restore with autoStart on.
+         *
          * @throws IllegalStateException If multiple instances of synchronizer with the same network+alias are
          * active at the same time.  Call `close` to finish one synchronizer before starting another one with the same
          * network+alias.
@@ -808,6 +916,9 @@ interface Synchronizer {
          * [DefaultSynchronizerFactory].
          */
         @Suppress("LongParameterList", "LongMethod", "TooGenericExceptionCaught")
+        // JvmOverloads keeps the pre-autoStart signature, which callers compiled against the
+        // previous release still link to.
+        @JvmOverloads
         suspend fun new(
             alias: String = ZcashSdk.DEFAULT_ALIAS,
             birthday: BlockHeight?,
@@ -817,7 +928,8 @@ interface Synchronizer {
             walletInitMode: WalletInitMode,
             zcashNetwork: ZcashNetwork,
             isTorEnabled: Boolean,
-            isExchangeRateEnabled: Boolean
+            isExchangeRateEnabled: Boolean,
+            autoStart: Boolean = true
         ): CloseableSynchronizer {
             val applicationContext = context.applicationContext
 
@@ -842,12 +954,14 @@ interface Synchronizer {
             // The pending transaction database no longer exists, so we can delete the file
             coordinator.deletePendingTransactionDatabase(zcashNetwork, alias)
 
+            val walletDbMutationGate = WalletDbMutationGate()
             val backend =
                 DefaultSynchronizerFactory.defaultBackend(
                     zcashNetwork,
                     alias,
                     saplingParamTool,
-                    coordinator
+                    coordinator,
+                    walletDbMutationGate
                 )
 
             val saplingParamFetcher = SaplingParamFetcher(saplingParamTool, backend)
@@ -891,8 +1005,15 @@ interface Synchronizer {
             val downloader = DefaultSynchronizerFactory.defaultDownloader(walletClient, blockStore)
 
             val chainTip =
-                when (walletInitMode) {
-                    is RestoreWallet -> {
+                when {
+                    // Fetching the chain tip is a network call. Without it the recovery progress
+                    // denominator stays unknown until the first sync, which is the same legal branch
+                    // as a failed fetch.
+                    !autoStart -> {
+                        null
+                    }
+
+                    walletInitMode is RestoreWallet -> {
                         when (
                             val response = downloader.getLatestBlockHeight(sdkFlags ifTor ServiceMode.UniqueTor)
                         ) {
@@ -928,6 +1049,9 @@ interface Synchronizer {
             val encoder = DefaultSynchronizerFactory.defaultEncoder(backend, saplingParamFetcher, repository)
 
             val txManager = DefaultSynchronizerFactory.defaultTxManager(encoder, walletClient, sdkFlags)
+            val standardPreferenceProvider = StandardPreferenceProvider(context)
+            val preferenceProvider = standardPreferenceProvider()
+            val offlineTransactionTracker = PreferenceOfflineTransactionTracker(preferenceProvider, alias)
             val processor =
                 DefaultSynchronizerFactory.defaultProcessor(
                     backend = backend,
@@ -936,10 +1060,9 @@ interface Synchronizer {
                     repository = repository,
                     txManager = txManager,
                     sdkFlags = sdkFlags,
-                    saplingParamFetcher = saplingParamFetcher
+                    saplingParamFetcher = saplingParamFetcher,
+                    offlineTransactionTracker = offlineTransactionTracker
                 )
-
-            val standardPreferenceProvider = StandardPreferenceProvider(context)
 
             return SdkSynchronizer.new(
                 context = context.applicationContext,
@@ -958,11 +1081,12 @@ interface Synchronizer {
                     ),
                 fetchExchangeChangeUsd =
                     exchangeRateIsolatedTorClient?.let { UsdExchangeRateFetcher(isolatedTorClient = it) },
-                preferenceProvider = standardPreferenceProvider(),
+                preferenceProvider = preferenceProvider,
                 torClient = torClient,
                 walletClient = walletClient,
                 walletClientFactory = walletClientFactory,
-                sdkFlags = sdkFlags
+                sdkFlags = sdkFlags,
+                autoStart = autoStart
             )
         }
 
@@ -973,6 +1097,7 @@ interface Synchronizer {
          * This is a blocking call, so it should not be called from the main thread.
          */
         @JvmStatic
+        @JvmOverloads
         @Suppress("LongParameterList")
         fun newBlocking(
             alias: String = ZcashSdk.DEFAULT_ALIAS,
@@ -983,7 +1108,8 @@ interface Synchronizer {
             walletInitMode: WalletInitMode,
             zcashNetwork: ZcashNetwork,
             isTorEnabled: Boolean,
-            isExchangeRateEnabled: Boolean
+            isExchangeRateEnabled: Boolean,
+            autoStart: Boolean = true
         ): CloseableSynchronizer =
             runBlocking {
                 new(
@@ -995,7 +1121,8 @@ interface Synchronizer {
                     walletInitMode = walletInitMode,
                     zcashNetwork = zcashNetwork,
                     isTorEnabled = isTorEnabled,
-                    isExchangeRateEnabled = isExchangeRateEnabled
+                    isExchangeRateEnabled = isExchangeRateEnabled,
+                    autoStart = autoStart
                 )
             }
 

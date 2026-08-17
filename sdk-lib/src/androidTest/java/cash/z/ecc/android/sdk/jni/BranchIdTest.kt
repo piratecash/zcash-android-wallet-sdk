@@ -4,6 +4,7 @@ import cash.z.ecc.android.sdk.annotation.MaintainedTest
 import cash.z.ecc.android.sdk.annotation.TestPurpose
 import cash.z.ecc.android.sdk.internal.TypesafeBackend
 import cash.z.ecc.android.sdk.internal.TypesafeBackendImpl
+import cash.z.ecc.android.sdk.internal.WalletDbMutationGate
 import cash.z.ecc.android.sdk.internal.jni.RustBackend
 import cash.z.ecc.android.sdk.model.BlockHeight
 import cash.z.ecc.android.sdk.model.ZcashNetwork
@@ -65,7 +66,8 @@ class BranchIdTest internal constructor(
                             File(""),
                             File(""),
                             ZcashNetwork.Testnet.id,
-                        )
+                        ),
+                        WalletDbMutationGate()
                     )
                 }
             val mainnetBackend =
@@ -77,7 +79,8 @@ class BranchIdTest internal constructor(
                             File(""),
                             File(""),
                             ZcashNetwork.Mainnet.id,
-                        )
+                        ),
+                        WalletDbMutationGate()
                     )
                 }
             return listOf(

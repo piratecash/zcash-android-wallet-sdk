@@ -9,7 +9,8 @@ val publicationVariant = "release"
 val isSnapshot = project.property("IS_SNAPSHOT").toString().toBoolean()
 val myVersion = project.property("LIBRARY_VERSION").toString()
 
-val myGroup = "cash.z.ecc.android"
+val myGroup = project.providers.gradleProperty("JITPACK_GROUP")
+    .getOrElse("cash.z.ecc.android")
 project.group = myGroup
 
 plugins.apply(MavenPublishPlugin::class.java)
@@ -63,30 +64,37 @@ extensions.getByType<MavenPublishBaseExtension>().apply {
 plugins.apply("org.gradle.signing")
 plugins.withId("org.gradle.signing") {
     project.the<SigningExtension>().apply {
-        // Maven Central allows signing for both snapshot and release SDK versions
-        isRequired = true
+        val skipSigning = project.providers.gradleProperty("ZCASH_SKIP_SIGNING")
+            .map { it.toBoolean() }
+            .getOrElse(false)
 
-        val signingKey = run {
-            val base64EncodedKey = project.property("ZCASH_ASCII_GPG_KEY").toString()
-            if (base64EncodedKey.isNotEmpty()) {
-                val keyBytes = Base64.getDecoder().decode(base64EncodedKey)
-                String(keyBytes)
-            } else {
-                ""
-            }
-        }
+        // Maven Central allows signing for both snapshot and release SDK versions.
+        // JitPack/local publishing can explicitly disable signing with -PZCASH_SKIP_SIGNING=true.
+        isRequired = !skipSigning
 
-        if (signingKey.isNotEmpty()) {
-            useInMemoryPgpKeys(signingKey, "")
-        }
-
-        project.mavenPublications(
-            object: Action<MavenPublication>{
-                override fun execute(publication: MavenPublication) {
-                    project.gradleSigning.sign(publication)
+        if (!skipSigning) {
+            val signingKey = run {
+                val base64EncodedKey = project.property("ZCASH_ASCII_GPG_KEY").toString()
+                if (base64EncodedKey.isNotEmpty()) {
+                    val keyBytes = Base64.getDecoder().decode(base64EncodedKey)
+                    String(keyBytes)
+                } else {
+                    ""
                 }
             }
-        )
+
+            if (signingKey.isNotEmpty()) {
+                useInMemoryPgpKeys(signingKey, "")
+            }
+
+            project.mavenPublications(
+                object: Action<MavenPublication>{
+                    override fun execute(publication: MavenPublication) {
+                        project.gradleSigning.sign(publication)
+                    }
+                }
+            )
+        }
     }
 }
 

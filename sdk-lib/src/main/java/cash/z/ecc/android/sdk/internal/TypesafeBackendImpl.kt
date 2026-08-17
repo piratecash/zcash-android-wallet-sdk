@@ -2,6 +2,8 @@ package cash.z.ecc.android.sdk.internal
 
 import cash.z.ecc.android.sdk.exception.InitializeException
 import cash.z.ecc.android.sdk.exception.RustLayerException
+import cash.z.ecc.android.sdk.internal.model.EncodedTransaction
+import cash.z.ecc.android.sdk.internal.model.JniEncodedTransaction
 import cash.z.ecc.android.sdk.internal.model.JniBlockMeta
 import cash.z.ecc.android.sdk.internal.model.JniSubtreeRoot
 import cash.z.ecc.android.sdk.internal.model.RewindResult
@@ -32,7 +34,8 @@ import kotlinx.coroutines.withContext
 
 @Suppress("TooManyFunctions")
 internal class TypesafeBackendImpl(
-    override val backend: Backend
+    override val backend: Backend,
+    private val walletDbMutationGate: WalletDbMutationGate
 ) : TypesafeBackend {
     override val network: ZcashNetwork
         get() = ZcashNetwork.from(backend.networkId)
@@ -46,51 +49,55 @@ internal class TypesafeBackendImpl(
         treeState: TreeState,
         recoverUntil: BlockHeight?
     ): AccountUsk =
-        AccountUsk.new(
-            backend.createAccount(
-                accountName = accountName,
-                keySource = keySource,
-                seed = seed.byteArray,
-                treeState = treeState.encoded,
-                recoverUntil = recoverUntil?.value
+        withWalletDbMutation("createAccountAndGetSpendingKey") {
+            AccountUsk.new(
+                backend.createAccount(
+                    accountName = accountName,
+                    keySource = keySource,
+                    seed = seed.byteArray,
+                    treeState = treeState.encoded,
+                    recoverUntil = recoverUntil?.value
+                )
             )
-        )
+        }
 
     override suspend fun importAccountUfvk(
         recoverUntil: BlockHeight?,
         setup: AccountImportSetup,
         treeState: TreeState,
     ): Account =
-        Account.new(
-            jniAccount =
-                when (setup.purpose) {
-                    is AccountPurpose.Spending -> {
-                        backend.importAccountUfvk(
-                            accountName = setup.accountName,
-                            keySource = setup.keySource,
-                            purpose = setup.purpose.value,
-                            recoverUntil = recoverUntil?.value,
-                            treeState = treeState.encoded,
-                            ufvk = setup.ufvk.encoding,
-                            seedFingerprint = setup.purpose.seedFingerprint,
-                            zip32AccountIndex = setup.purpose.zip32AccountIndex.index,
-                        )
-                    }
+        withWalletDbMutation("importAccountUfvk") {
+            Account.new(
+                jniAccount =
+                    when (setup.purpose) {
+                        is AccountPurpose.Spending -> {
+                            backend.importAccountUfvk(
+                                accountName = setup.accountName,
+                                keySource = setup.keySource,
+                                purpose = setup.purpose.value,
+                                recoverUntil = recoverUntil?.value,
+                                treeState = treeState.encoded,
+                                ufvk = setup.ufvk.encoding,
+                                seedFingerprint = setup.purpose.seedFingerprint,
+                                zip32AccountIndex = setup.purpose.zip32AccountIndex.index,
+                            )
+                        }
 
-                    AccountPurpose.ViewOnly -> {
-                        backend.importAccountUfvk(
-                            accountName = setup.accountName,
-                            keySource = setup.keySource,
-                            purpose = setup.purpose.value,
-                            recoverUntil = recoverUntil?.value,
-                            treeState = treeState.encoded,
-                            ufvk = setup.ufvk.encoding,
-                            seedFingerprint = null,
-                            zip32AccountIndex = null,
-                        )
+                        AccountPurpose.ViewOnly -> {
+                            backend.importAccountUfvk(
+                                accountName = setup.accountName,
+                                keySource = setup.keySource,
+                                purpose = setup.purpose.value,
+                                recoverUntil = recoverUntil?.value,
+                                treeState = treeState.encoded,
+                                ufvk = setup.ufvk.encoding,
+                                seedFingerprint = null,
+                                zip32AccountIndex = null,
+                            )
+                        }
                     }
-                }
-        )
+            )
+        }
 
     override suspend fun getAccountForUfvk(ufvk: UnifiedFullViewingKey): Account? =
         backend.getAccountForUfvk(ufvk = ufvk.encoding)?.let {
@@ -124,6 +131,11 @@ internal class TypesafeBackendImpl(
             )
         )
 
+    override suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal =
+        Proposal.fromUnsafe(
+            backend.proposeOrchardToIronwoodMigration(account.accountUuid.value)
+        )
+
     override suspend fun proposeShielding(
         account: Account,
         shieldingThreshold: Long,
@@ -146,22 +158,38 @@ internal class TypesafeBackendImpl(
         proposal: Proposal,
         usk: UnifiedSpendingKey
     ): List<FirstClassByteArray> =
-        backend
-            .createProposedTransactions(
-                proposal.toUnsafe(),
-                usk.copyBytes()
-            ).map { FirstClassByteArray(it) }
+        withWalletDbMutation("createProposedTransactions") {
+            backend
+                .createProposedTransactions(
+                    proposal.toUnsafe(),
+                    usk.copyBytes()
+                ).map { FirstClassByteArray(it) }
+        }
+
+    override suspend fun createProposedTransactionsDetached(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction> =
+        withWalletDbMutation("createProposedTransactionsDetached") {
+            backend
+                .createProposedTransactionsDetached(
+                    proposal.toUnsafe(),
+                    usk.copyBytes()
+                ).map { it.toEncodedTransaction() }
+        }
 
     override suspend fun createPcztFromProposal(
         account: Account,
         proposal: Proposal
     ): Pczt =
-        Pczt(
-            backend.createPcztFromProposal(
-                account.accountUuid.value,
-                proposal.toUnsafe()
+        withWalletDbMutation("createPcztFromProposal") {
+            Pczt(
+                backend.createPcztFromProposal(
+                    account.accountUuid.value,
+                    proposal.toUnsafe()
+                )
             )
-        )
+        }
 
     override suspend fun redactPcztForSigner(pczt: Pczt): Pczt = Pczt(backend.redactPcztForSigner(pczt.toByteArray()))
 
@@ -174,12 +202,14 @@ internal class TypesafeBackendImpl(
         pcztWithProofs: Pczt,
         pcztWithSignatures: Pczt
     ): FirstClassByteArray =
-        FirstClassByteArray(
-            backend.extractAndStoreTxFromPczt(
-                pcztWithProofs.toByteArray(),
-                pcztWithSignatures.toByteArray()
+        withWalletDbMutation("extractAndStoreTxFromPczt") {
+            FirstClassByteArray(
+                backend.extractAndStoreTxFromPczt(
+                    pcztWithProofs.toByteArray(),
+                    pcztWithSignatures.toByteArray()
+                )
             )
-        )
+        }
 
     override suspend fun getCurrentAddress(account: Account): String =
         runCatching {
@@ -189,21 +219,25 @@ internal class TypesafeBackendImpl(
         }.getOrElse { throw RustLayerException.GetAddressException(it) }
 
     override suspend fun getSingleUseTransparentAddress(accountUuid: AccountUuid): SingleUseTransparentAddress =
-        runCatching {
-            SingleUseTransparentAddress.new(backend.getSingleUseTransparentAddress(accountUuid.value))
-        }.onFailure {
-            Twig.warn(it) { "Currently unable to get single-use transparent address" }
-        }.getOrElse { throw RustLayerException.GetAddressException(it) }
+        withWalletDbMutation("getSingleUseTransparentAddress") {
+            runCatching {
+                SingleUseTransparentAddress.new(backend.getSingleUseTransparentAddress(accountUuid.value))
+            }.onFailure {
+                Twig.warn(it) { "Currently unable to get single-use transparent address" }
+            }.getOrElse { throw RustLayerException.GetAddressException(it) }
+        }
 
     override suspend fun getNextAvailableAddress(
         account: Account,
         request: UnifiedAddressRequest
     ): String =
-        runCatching {
-            backend.getNextAvailableAddress(account.accountUuid.value, request.flags)
-        }.onFailure {
-            Twig.warn(it) { "Currently unable to get next available address" }
-        }.getOrElse { throw RustLayerException.GetAddressException(it) }
+        withWalletDbMutation("getNextAvailableAddress") {
+            runCatching {
+                backend.getNextAvailableAddress(account.accountUuid.value, request.flags)
+            }.onFailure {
+                Twig.warn(it) { "Currently unable to get next available address" }
+            }.getOrElse { throw RustLayerException.GetAddressException(it) }
+        }
 
     override suspend fun listTransparentReceivers(account: Account): List<String> =
         backend.listTransparentReceivers(account.accountUuid.value)
@@ -211,10 +245,14 @@ internal class TypesafeBackendImpl(
     override fun getBranchIdForHeight(height: BlockHeight): Long = backend.getBranchIdForHeight(height.value)
 
     override suspend fun rewindToHeight(height: BlockHeight): RewindResult =
-        RewindResult.new(backend.rewindToHeight(height.value))
+        withWalletDbMutation("rewindToHeight") {
+            RewindResult.new(backend.rewindToHeight(height.value))
+        }
 
     override suspend fun truncateToChainState(chainState: TreeState) =
-        backend.truncateToChainState(chainState.encoded)
+        withWalletDbMutation("truncateToChainState") {
+            backend.truncateToChainState(chainState.encoded)
+        }
 
     override suspend fun getLatestCacheHeight(): BlockHeight? =
         backend.getLatestCacheHeight()?.let {
@@ -224,7 +262,9 @@ internal class TypesafeBackendImpl(
     override suspend fun findBlockMetadata(height: BlockHeight): JniBlockMeta? = backend.findBlockMetadata(height.value)
 
     override suspend fun rewindBlockMetadataToHeight(height: BlockHeight) {
-        backend.rewindBlockMetadataToHeight(height.value)
+        withWalletDbMutation("rewindBlockMetadataToHeight") {
+            backend.rewindBlockMetadataToHeight(height.value)
+        }
     }
 
     override suspend fun getDownloadedUtxoBalance(address: String): Zatoshi {
@@ -242,13 +282,15 @@ internal class TypesafeBackendImpl(
         script: ByteArray,
         value: Long,
         height: BlockHeight
-    ) = backend.putUtxo(
-        txId,
-        index,
-        script,
-        value,
-        height.value
-    )
+    ) = withWalletDbMutation("putUtxo") {
+        backend.putUtxo(
+            txId,
+            index,
+            script,
+            value,
+            height.value
+        )
+    }
 
     override suspend fun getMemoAsUtf8(
         txId: ByteArray,
@@ -262,24 +304,26 @@ internal class TypesafeBackendImpl(
         )
 
     override suspend fun initDataDb(seed: FirstClassByteArray?) {
-        val ret = backend.initDataDb(seed?.byteArray)
-        when (ret) {
-            2 -> {
-                throw InitializeException.SeedNotRelevant
-            }
+        withWalletDbMutation("initDataDb") {
+            val ret = backend.initDataDb(seed?.byteArray)
+            when (ret) {
+                2 -> {
+                    throw InitializeException.SeedNotRelevant
+                }
 
-            1 -> {
-                throw InitializeException.SeedRequired
-            }
+                1 -> {
+                    throw InitializeException.SeedRequired
+                }
 
-            0 -> { /* Successful case - no action needed */ }
+                0 -> { /* Successful case - no action needed */ }
 
-            -1 -> {
-                error("Rust backend only uses -1 as an error sentinel")
-            }
+                -1 -> {
+                    error("Rust backend only uses -1 as an error sentinel")
+                }
 
-            else -> {
-                error("Rust backend used a code that needs to be defined here")
+                else -> {
+                    error("Rust backend used a code that needs to be defined here")
+                }
             }
         }
     }
@@ -288,27 +332,42 @@ internal class TypesafeBackendImpl(
         saplingStartIndex: UInt,
         saplingRoots: List<SubtreeRoot>,
         orchardStartIndex: UInt,
-        orchardRoots: List<SubtreeRoot>
-    ) = backend.putSubtreeRoots(
-        saplingStartIndex = saplingStartIndex.toLong(),
-        saplingRoots =
-            saplingRoots.map {
-                JniSubtreeRoot.new(
-                    rootHash = it.rootHash,
-                    completingBlockHeight = it.completingBlockHeight.value
-                )
-            },
-        orchardStartIndex = orchardStartIndex.toLong(),
-        orchardRoots =
-            orchardRoots.map {
-                JniSubtreeRoot.new(
-                    rootHash = it.rootHash,
-                    completingBlockHeight = it.completingBlockHeight.value
-                )
-            },
-    )
+        orchardRoots: List<SubtreeRoot>,
+        ironwoodStartIndex: UInt,
+        ironwoodRoots: List<SubtreeRoot>
+    ) = withWalletDbMutation("putSubtreeRoots") {
+        backend.putSubtreeRoots(
+            saplingStartIndex = saplingStartIndex.toLong(),
+            saplingRoots =
+                saplingRoots.map {
+                    JniSubtreeRoot.new(
+                        rootHash = it.rootHash,
+                        completingBlockHeight = it.completingBlockHeight.value
+                    )
+                },
+            orchardStartIndex = orchardStartIndex.toLong(),
+            orchardRoots =
+                orchardRoots.map {
+                    JniSubtreeRoot.new(
+                        rootHash = it.rootHash,
+                        completingBlockHeight = it.completingBlockHeight.value
+                    )
+                },
+            ironwoodStartIndex = ironwoodStartIndex.toLong(),
+            ironwoodRoots =
+                ironwoodRoots.map {
+                    JniSubtreeRoot.new(
+                        rootHash = it.rootHash,
+                        completingBlockHeight = it.completingBlockHeight.value
+                    )
+                },
+        )
+    }
 
-    override suspend fun updateChainTip(height: BlockHeight) = backend.updateChainTip(height.value)
+    override suspend fun updateChainTip(height: BlockHeight) =
+        withWalletDbMutation("updateChainTip") {
+            backend.updateChainTip(height.value)
+        }
 
     override suspend fun getFullyScannedHeight(): BlockHeight? =
         runCatching {
@@ -332,14 +391,20 @@ internal class TypesafeBackendImpl(
         fromHeight: BlockHeight,
         fromState: TreeState,
         limit: Long
-    ): ScanSummary = ScanSummary.new(backend.scanBlocks(fromHeight.value, fromState.encoded, limit))
+    ): ScanSummary =
+        withWalletDbMutation("scanBlocks") {
+            ScanSummary.new(backend.scanBlocks(fromHeight.value, fromState.encoded, limit))
+        }
 
     override suspend fun transactionDataRequests(): List<TransactionDataRequest> =
         backend.transactionDataRequests().map { jniRequest ->
             TransactionDataRequest.new(jniRequest)
         }
 
-    override suspend fun fixWitnesses() = backend.fixWitnesses()
+    override suspend fun fixWitnesses() =
+        withWalletDbMutation("fixWitnesses") {
+            backend.fixWitnesses()
+        }
 
     override suspend fun getWalletSummary(): WalletSummary? =
         backend.getWalletSummary()?.let { jniWalletSummary ->
@@ -355,17 +420,21 @@ internal class TypesafeBackendImpl(
         tx: ByteArray,
         minedHeight: BlockHeight?
     ): FirstClassByteArray =
-        FirstClassByteArray(
-            backend.decryptAndStoreTransaction(tx, minedHeight?.value)
-        )
+        withWalletDbMutation("decryptAndStoreTransaction") {
+            FirstClassByteArray(
+                backend.decryptAndStoreTransaction(tx, minedHeight?.value)
+            )
+        }
 
     override suspend fun setTransactionStatus(
         txId: ByteArray,
         status: TransactionStatus
-    ) = backend.setTransactionStatus(
-        txId = txId,
-        status = status.toPrimitiveValue()
-    )
+    ) = withWalletDbMutation("setTransactionStatus") {
+        backend.setTransactionStatus(
+            txId = txId,
+            status = status.toPrimitiveValue()
+        )
+    }
 
     override fun getSaplingReceiver(ua: String): String? = backend.getSaplingReceiver(ua)
 
@@ -374,9 +443,11 @@ internal class TypesafeBackendImpl(
     override suspend fun initBlockMetaDb(): Int = backend.initBlockMetaDb()
 
     override suspend fun writeBlockMetadata(blockMetadata: List<JniBlockMeta>) =
-        backend.writeBlockMetadata(
-            blockMetadata
-        )
+        withWalletDbMutation("writeBlockMetadata") {
+            backend.writeBlockMetadata(
+                blockMetadata
+            )
+        }
 
     override fun isValidSaplingAddr(addr: String): Boolean = backend.isValidSaplingAddr(addr)
 
@@ -386,5 +457,24 @@ internal class TypesafeBackendImpl(
 
     override fun isValidTexAddr(addr: String): Boolean = backend.isValidTexAddr(addr)
 
-    override suspend fun deleteAccount(accountUuid: AccountUuid) = backend.deleteAccount(accountUuid.value)
+    override suspend fun deleteAccount(accountUuid: AccountUuid) =
+        withWalletDbMutation("deleteAccount") {
+            backend.deleteAccount(accountUuid.value)
+        }
+
+    private suspend fun <T> withWalletDbMutation(
+        operation: String,
+        block: suspend () -> T
+    ): T = walletDbMutationGate.withWriteAccess(operation, block)
+
+    private fun JniEncodedTransaction.toEncodedTransaction() =
+        EncodedTransaction(
+            txId = FirstClassByteArray(txId),
+            raw = FirstClassByteArray(raw),
+            expiryHeight = expiryHeight.toBlockHeightOrNull()
+        )
+
+    private fun Long.toBlockHeightOrNull() =
+        takeUnless { it < 0 }
+            ?.let { BlockHeight.new(it) }
 }

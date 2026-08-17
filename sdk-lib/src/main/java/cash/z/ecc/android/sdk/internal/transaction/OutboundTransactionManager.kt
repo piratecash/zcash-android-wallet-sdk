@@ -47,6 +47,15 @@ internal interface OutboundTransactionManager {
     ): Proposal
 
     /**
+     * Creates a proposal migrating the account's entire Orchard balance into Ironwood.
+     *
+     * @param account the account whose Orchard funds to migrate.
+     *
+     * @return the proposal or an exception
+     */
+    suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal
+
+    /**
      * Creates a proposal for shielding any transparent funds received by the given account.
      *
      * @param account the account for which to shield funds.
@@ -81,6 +90,11 @@ internal interface OutboundTransactionManager {
      * @return the successfully encoded transactions or an exception
      */
     suspend fun createProposedTransactions(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction>
+
+    suspend fun createSignedTransactionsDetached(
         proposal: Proposal,
         usk: UnifiedSpendingKey
     ): List<EncodedTransaction>

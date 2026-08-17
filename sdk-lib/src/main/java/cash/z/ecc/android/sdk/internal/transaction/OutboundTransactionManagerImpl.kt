@@ -49,6 +49,9 @@ internal class OutboundTransactionManagerImpl(
         return encoder.proposeTransfer(account, recipient, amount, memoBytes)
     }
 
+    override suspend fun proposeOrchardToIronwoodMigration(account: Account): Proposal =
+        encoder.proposeOrchardToIronwoodMigration(account)
+
     override suspend fun proposeShielding(
         account: Account,
         shieldingThreshold: Zatoshi,
@@ -68,6 +71,11 @@ internal class OutboundTransactionManagerImpl(
         proposal: Proposal,
         usk: UnifiedSpendingKey
     ): List<EncodedTransaction> = encoder.createProposedTransactions(proposal, usk)
+
+    override suspend fun createSignedTransactionsDetached(
+        proposal: Proposal,
+        usk: UnifiedSpendingKey
+    ): List<EncodedTransaction> = encoder.createProposedTransactionsDetached(proposal, usk)
 
     override suspend fun submit(encodedTransaction: EncodedTransaction): TransactionSubmitResult =
         when (

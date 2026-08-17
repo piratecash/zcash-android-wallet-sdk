@@ -2,6 +2,7 @@ package cash.z.ecc.android.sdk.internal.storage.block
 
 import cash.z.ecc.android.sdk.internal.TypesafeBackend
 import cash.z.ecc.android.sdk.internal.TypesafeBackendImpl
+import cash.z.ecc.android.sdk.internal.WalletDbMutationGate
 import cash.z.ecc.android.sdk.internal.ext.deleteRecursivelySuspend
 import cash.z.ecc.android.sdk.internal.ext.existsSuspend
 import cash.z.ecc.android.sdk.internal.ext.listSuspend
@@ -61,7 +62,7 @@ class FileCompactBlockRepositoryTest {
             val rustBackend = FakeRustBackendFixture().new()
             val blockRepository =
                 getMockedFileCompactBlockRepository(
-                    TypesafeBackendImpl(rustBackend),
+                    TypesafeBackendImpl(rustBackend, WalletDbMutationGate()),
                     FilePathFixture.newBlocksDir()
                 )
 
@@ -78,7 +79,7 @@ class FileCompactBlockRepositoryTest {
             val rustBackend = FakeRustBackendFixture().new()
             val blockRepository =
                 getMockedFileCompactBlockRepository(
-                    TypesafeBackendImpl(rustBackend),
+                    TypesafeBackendImpl(rustBackend, WalletDbMutationGate()),
                     FilePathFixture.newBlocksDir()
                 )
 
@@ -111,7 +112,7 @@ class FileCompactBlockRepositoryTest {
             val rustBackend = FakeRustBackendFixture().new()
             val blockRepository =
                 getMockedFileCompactBlockRepository(
-                    TypesafeBackendImpl(rustBackend),
+                    TypesafeBackendImpl(rustBackend, WalletDbMutationGate()),
                     FilePathFixture.newBlocksDir()
                 )
 
@@ -130,7 +131,7 @@ class FileCompactBlockRepositoryTest {
             val rustBackend = FakeRustBackendFixture().new()
             val blockRepository =
                 getMockedFileCompactBlockRepository(
-                    TypesafeBackendImpl(rustBackend),
+                    TypesafeBackendImpl(rustBackend, WalletDbMutationGate()),
                     FilePathFixture.newBlocksDir()
                 )
 
@@ -156,7 +157,7 @@ class FileCompactBlockRepositoryTest {
             val rootBlocksDirectory = FilePathFixture.newBlocksDir()
             val blockRepository =
                 getMockedFileCompactBlockRepository(
-                    TypesafeBackendImpl(rustBackend),
+                    TypesafeBackendImpl(rustBackend, WalletDbMutationGate()),
                     FilePathFixture.newBlocksDir()
                 )
 
@@ -181,7 +182,7 @@ class FileCompactBlockRepositoryTest {
 
             val blockRepository =
                 getMockedFileCompactBlockRepository(
-                    TypesafeBackendImpl(rustBackend),
+                    TypesafeBackendImpl(rustBackend, WalletDbMutationGate()),
                     FilePathFixture.newBlocksDir()
                 )
 
@@ -219,7 +220,7 @@ class FileCompactBlockRepositoryTest {
             val rustBackend = FakeRustBackendFixture().new()
             val blockRepository =
                 getMockedFileCompactBlockRepository(
-                    TypesafeBackendImpl(rustBackend),
+                    TypesafeBackendImpl(rustBackend, WalletDbMutationGate()),
                     FilePathFixture.newBlocksDir()
                 )
 
